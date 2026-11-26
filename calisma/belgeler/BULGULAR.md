@@ -67,3 +67,32 @@ Ayrıntılı A/B sonuçları: TEST_DEFTERI.md. Eski geniş aday tablosu: ADAYLAR
 | F2 | 8 GB / 16 GB NVIDIA sınıfında kaynaklı en iyi sonuç bizim 114 ms (Neon 22:50) | soldsawn 104-129 (48 GB RAM), GTX1660 98-112 (62 GB, Linux, bozuk kafa) |
 | F3 | mandyhub-sinkfinger v0.2.0 | yalnız launcher, exe CI'sız/imzasız → ret |
 | F4 | Discord listesi: retailayer/ztrx 404, VIctory-loud kaynak yok, VIctory-S/GDeflate/DexNom/xcl/VItoriaBr değer yok; flamingo d56f7b04 heap geçişi 31.6 → 27.0 ms (RTX 4070) | not |
+
+## G. AMD neden hızlı (Neon 00:35; Claude descriptor/host.rs:1332-1405 ve HANDOFF.md:12'yi doğruladı)
+
+| # | Neden | Kanıt | Bize etkisi |
+|---|---|---|---|
+| G1 | **Raw twin**: AMD 2^21 view heap alır → raw_twins açık; NVIDIA 1,000,000'da sınırlı → yok → hizasız tamponlar kopyaya düşer (#23 patlaması), `PORT_CBV` NVIDIA'da işe yaramaz | descriptor/host.rs:1332-1408, avatarmanz #23/#221, fxceless #1379 | **güçlü**; NVIDIA'ya özel en büyük ceza. Eski tabanımızda #23 yok |
+| G2 | NVIDIA sistem RAM'inden (PCIe) okurken çok yavaş: PORT_CONSTANTS 5080'de kart beklemesi 38 → 119 ms; küçük tamponlar VRAM'e alınınca 42 → 18.5 | fxceless #1379 | **güçlü**; B1 (SHARED 3.6-5.3 GB) ile aynı mekanizma |
+| G3 | VRAM: 16-24 GB'ta taşma yok; 8 GB'ta %80+ dolu | çok kaynak | güçlü |
+| G4 | Wave64: Xbox RDNA2 64-lane; NVIDIA 32-lane'de çift/yarım yol, bazı pipeline'lar reddediliyor | host.rs:1001-1010, fxceless #854 | doğruluk etkisi; **fps etkisi ölçülmemiş** |
+| G5 | Geliştirici AMD'de ölçüp optimize ediyor (avatarmanz "7900 XTX first") | README | doğrudan |
+| G6 | Bizim laptopta ReBAR **açık** (HANDOFF.md:12), GPU_UPLOAD heap çalışıyor (WINDOWS_BAR_MB kilitli RAM 4726 → 3252) | bizde | B adımında kullanılabilir |
+| G7 | CPU: `State::bind` örneklerin %22'si, `ListViews` her listede `made.clear()` → karede ~11k `make_twinned` | bizim STATUS 101/113 (eski profil) | **bizde düzeltilmedi** → aday (CPU tarafı) |
+| — | Neon ayrıca MESH_LAUNCH'u önerdi ama **bizde denendi → ret** (146 → 168, 139 → 178 ms; TEST_DEFTERI). WATCH_RESERVATION için bugünkü logda write-watch 5.7 ms (eski 43 ms değil) | — | tekrar önerme |
+
+## H. Başka emülatörler ortak belleği nasıl çözüyor (Sol 00:40; 26.11 19:15 taramasının yerine, bu kez kayıtlı)
+
+| # | Proje | Yöntem | Ölçüm | Bizdeki karşılığı |
+|---|---|---|---|---|
+| H1 | **Ryujinx** | GPU'nun değiştirdiği aralıkları izler; CPU erişince yalnız o sayfaları flush eder (lazy flush-on-read, commit 1fc0f569) | ölçülmemiş | watch.rs + card_back → **desen 1** |
+| H2 | **shadPS4** | CPU/GPU kirli sayfaları ayrı; CPU erişiminde GPU aralığı flush. Precise vs Disabled modları | **RTX 5090 Bloodborne: Precise 106 bekleme/kare, 7.23 ms; Disabled 0; p99 her ikisinde 50 ms** (issue #4316); Disabled DriveClub pozlamasını bozuyor | desen 1; bedel ölçülebilir küçük |
+| H3 | **yuzu** | GPU-modified tampon takibi + normal doğrulukta bazı fence/koşullu çizim geri okumalarını atlar | ilerleme raporu ort. %50, en çok %87 (sürüm + ayar birlikte değişmiş) | relay_card_back |
+| H4 | **Dolphin** | EFB/XFB'yi yalnız GPU dokusunda tut ("to texture only"); RAM kopyalarını ertele/birleştir, örtülen kopyayı düşür | sayı yok (performans rehberi) | relay_card_back; **desen 2** |
+| H5 | **Xenia / Canary** | misafir belleği GPU tamponunda yansıtır, memory watch; `readback_resolve=fast` bir kare önceki sonucu kullanır | ölçülmemiş | shadow.rs, card_back |
+| H6 | **Cemu** | streamout GPU'da kalır, RAM'e imza; CPU sayfayı değiştirirse yalnız o alt aralık yeniden yüklenir | ölçülmemiş | under 70 ms birleştirmeye en yakın |
+| H7 | **Eden / Citron-NEO** | tampon geri okumasını ayarla kapatma (bazı efektler bozulur); 64 B kullanım takibi | ölçülmemiş | card_back seçimi |
+| H8 | **vkd3d-proton / DXVK** | UPLOAD heap'i CPU'nun görebildiği VRAM'e koy (ReBAR); VRAM baskısında kullanılmayanı RAM'e taşı | NVIDIA blog: GPU upload heap tek vertex-fetch 0.20 → <0.01 ms | host.rs upload 24-27 ms; **desen 3**; bizde ReBAR açık (G6) |
+| H9 | Kyty, RPCS3, Apple UMA, NCE | aralık→nesne eşleme + hash; çakışmada sıra ile flush; Shared vs Managed | ölçülmemiş | referans |
+
+**Sol'un 3 deseni (PLAN adım 4'e girdi):** (1) GPU'nun yazdığını ilk CPU erişimine kadar VRAM'de tut, yalnız gereken aralığı getir (Ryujinx, shadPS4) → copy back 30-60 ms; (2) örtülen yazıları ele, GPU'da kalan kaynakları sınıflandır (Dolphin, Xenia, Cemu) → under ~70 ms; (3) belleği erişim desenine göre yerleştir, CPU yazma tamponlarını GPU_UPLOAD heap'ine (vkd3d) → upload 24-27 ms + PCIe taşması + RAM.

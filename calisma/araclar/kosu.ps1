@@ -40,6 +40,8 @@ $taban = [ordered]@{
     # 26.11 18:30 KABUL: oyunun kendi TAA upscaler'i + %50 ic cozunurluk (rsa/rsb: 143.5 -> 113 ms, -%21)
     VICTORY_OWN_UPSCALER       = '1'
     VICTORY_RENDER_SCALE       = '0.5'
+    # 27.11 00:40 KABUL: #868 geri kopya atlama (144 -> 130, 140 -> 128 ms)
+    VICTORY_SKIP_WC_BACK       = '1'
     VICTORY_RT_SKIP_RESOLVE    = '1'
     VICTORY_RT_SKIP_ACTIVATE   = '1'
     VICTORY_INDIRECT_BATCH     = '2'
