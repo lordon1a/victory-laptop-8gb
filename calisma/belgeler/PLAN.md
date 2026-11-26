@@ -53,3 +53,12 @@ Her adımdan önce: BULGULAR.md'ye bak + ajana "kim yaptı/ölçtü" taraması (
 ## Açık araştırmalar (27.11 00:23)
 - Neon: AMD neden hızlı (RDNA2 = Xbox, raw twin, ReBAR/GPU upload heap, VRAM).
 - Sol: emülatörler ortak belleği nasıl çözüyor (26.11 19:15 taramasının ayrıntısı kaybolmuştu; bu kez BULGULAR'a işlenecek).
+
+## Adım 6 — motion blur kapatma (Yiğit isteği 27.11 01:50)
+- Önce tarama (Neon, 01:50): kim kapattı, oyun ayarı mı / pipeline hash atlama mı / shader yaması mı; bizde SKIP_PIPELINES benzeri yol var mı.
+- Sonra: tek koşu + kare karşılaştırma (hareket halinde bulanıklık, ghosting yok mu), fps etkisi.
+- Bitti kanıtı: hareketli karelerde bulanıklık yok, başka efekt bozulmamış.
+
+## Adım 2 sonucu (27.11 01:50) — küçük tamponları karta al
+- MIN_KB=64 + MB=1024: 130 → 74-80 ms (7.5 → 13 fps). Görüntü bedeli: tel/INMATE kaybı (SKIP_WC_BACK yarışı), tişört/saç ışığı farkı.
+- Temiz aday: min64 + CARD_STEPS=1 + TEXTURE_NO_WAIT=0 (mkf-x2, 78 ms, tel + INMATE var, saç doğru koyu). Kabul için 2. tur + SKIP_WC_BACK=0 varyantı.
