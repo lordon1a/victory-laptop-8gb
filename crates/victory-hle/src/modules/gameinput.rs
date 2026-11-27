@@ -520,6 +520,14 @@ impl Hub {
     }
 }
 
+/// The keys the stand-in pad does not take: a key bound in the layout that
+/// holds moves the pad only, so the title does not also read it as its own
+/// keyboard key (27.11: W and S walked the pad and did the title's keyboard
+/// action at once). Unbound keys still reach the title's keyboard.
+fn unbound(keys: Vec<KeyState>, layout: &binds::Layout) -> Vec<KeyState> {
+    keys.into_iter().filter(|k| !layout.iter().any(|&(vk, _)| vk == k.virtual_key)).collect()
+}
+
 impl State {
     fn poll(
         &mut self,
@@ -536,6 +544,7 @@ impl State {
             let pad = pads.into_iter().flatten().fold(fallback(&keys, mouse, &layout), merged);
             let pad = self.unseen.add(pad, now);
             self.update(devices, FALLBACK, Some(Value::Pad(pad)), now, &mut events);
+            let keys = unbound(keys, &layout);
             self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
             return events;
         }
@@ -543,11 +552,13 @@ impl State {
         for (slot, pad) in pads.into_iter().enumerate() {
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }
-        let fallback = (!any_pad).then(|| {
-            let layout = binds::layout(|vk| pressed(&keys, mouse, vk));
-            Value::Pad(self.unseen.add(fallback(&keys, mouse, &layout), now))
-        });
+        let layout = (!any_pad).then(|| binds::layout(|vk| pressed(&keys, mouse, vk)));
+        let fallback = layout.as_ref().map(|layout| Value::Pad(self.unseen.add(fallback(&keys, mouse, layout), now)));
         self.update(devices, FALLBACK, fallback, now, &mut events);
+        let keys = match &layout {
+            Some(layout) => unbound(keys, layout),
+            None => keys,
+        };
         self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
     }
@@ -1620,17 +1631,20 @@ mod tests {
         register(hub, KEYBOARD_KIND, 2, &log);
         assert_eq!(*log.lock().unwrap(), [(KEYBOARD, STATUS_CONNECTED, 0)]);
 
-        let keys = vec![key(b'W'), key(0x0D), key(b'L'), key(b'O')];
+        // F12 (0x7B) is bound to nothing; the others are the stand-in pad's.
+        let keys = vec![key(b'W'), key(0x0D), key(b'L'), key(b'O'), key(0x7B)];
         host.lock().unwrap().keys = keys.clone();
         hub.poll();
         let r = current(hub, KEYBOARD_KIND, KEYBOARD).unwrap();
         let count = slot::<extern "system" fn(*const Reading) -> u32, _>(r, 0x70);
         let state =
             slot::<extern "system" fn(*const Reading, u32, *mut KeyState) -> u32, _>(r, 0x78);
-        assert_eq!(count(r), 4);
+        // A key the stand-in pad takes does not reach the title as a key too:
+        // it would act twice (W walking and, as a key, doing something else).
+        assert_eq!(count(r), 1);
         let mut got = [KeyState::default(); 8];
-        assert_eq!(state(r, 8, got.as_mut_ptr()), 4);
-        assert_eq!(got[..4], keys[..]);
+        assert_eq!(state(r, 8, got.as_mut_ptr()), 1);
+        assert_eq!(got[..1], keys[4..]);
         release(r);
 
         let r = current(hub, GAMEPAD_KIND, FALLBACK).unwrap();

@@ -84,6 +84,7 @@ Bekleyen raporlar (12:30): Sol #1171 portu. GELDİ: Sol genel tarama 12:00; Neon
 Topluluk: BlatWolf (Win10, 4060) — Agility ile çalıştı, GPU %100; TDR için TdrDelay=10 önerildi.
 
 ## Hedef + sıradaki adımlar
+- 03:58: FSR 3 FG portu vw-fg 8c85a09 (Neon), check/test geçti, ÇALIŞTIRILMADI; diff incelendi, FG kapalıyken yol aynı. REAPER A/B 2. turda. Sırada: klavye + RAM boşaltma yarış düzeltmesi derle/test, sonra FG için AMD SDK 2.4.0 DLL (imza kontrol) + OWN_UPSCALER=0 maliyeti.
 27.11 03:28 Yiğit uzandı (/goal: sen devam et). Durum: taban (Adım 2) uzun koşuda ptf-taban 10 dk 13.4-15.3 fps stabil (C13); kare 71.9 ms = hazırlık 58.3 (kopyalar 22.7) + geri kopya 15.8 → darboğaz CPU. POOL_DISCARD MEM_RESET modu çöküyor (C10), TRIM_ONLY modu 10 dk sağlam (C11/C12, uzun oyunda +%9 tek çift). RAM_TRIM 26.11'de reddedilmişti (Neon önerisi tekrar, düzeltildi). Çalışan: ptf-trim (10 dk). Neon: REAPER portu (vw-reaper worktree). Sıra: ptf karşılaştırma → REAPER A/B → MKmajster descriptor işaretleme → motion blur maliyeti → RENDER_SCALE 0.4 → FSR FG (adım 7, Yiğit DLL kararı bekliyor).
 27.11 02:20 Sol 3 saatlik tarama işlendi (H13). Test sırası: pda POOL_DISCARD A/B (sürüyor) → MKmajster descriptor işaretleme (RTX 3070, sync_heaps 17 → 0.5 ms; Neon port) → SPREAD_LEAN → uçak sahnesi + CARD_CAPPED sayacı.
 27.11 02:08 ✓ ADIM 2 KABUL: x2 ayarları kosu.ps1 tabanına (mkh temiz: 118 → 90 ms; 1. tur 129-134 → 78). Sıradaki: uçak sahnesinde doğrula (0b), POOL_DISCARD (RAM, Op-lite), d1fe0bd0 (error 538), TABLE_MEMO (CPU), motion blur menüden.

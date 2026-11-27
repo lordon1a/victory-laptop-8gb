@@ -398,6 +398,11 @@ struct Section {
     resident: Box<[std::sync::atomic::AtomicU64]>,
     /// (`VICTORY_POOL_DISCARD`) A bit per page: discarded and not written since.
     discarded: Box<[std::sync::atomic::AtomicU64]>,
+    /// (`VICTORY_POOL_DISCARD`) A bit per page: written through
+    /// [`Section::window`] since it was last noted unshown. Such a page is
+    /// never discarded: DirectStorage fills free pool pages before the title
+    /// maps them, and a reset in between would wipe the fresh bytes.
+    fresh: Box<[std::sync::atomic::AtomicU64]>,
 }
 
 impl Section {
@@ -703,6 +708,11 @@ pub extern "system" fn XMemAllocatePhysicalPages(
         } else {
             Box::new([])
         },
+        fresh: if track {
+            (0..words).map(|_| std::sync::atomic::AtomicU64::new(0)).collect()
+        } else {
+            Box::new([])
+        },
     });
     let mut table = page_table_mut();
     let first = table.next_page;
@@ -854,6 +864,8 @@ pub(crate) fn write_physical(pages: &[usize], offset: usize, data: &[u8]) -> boo
         return false;
     };
     let (mut within, mut done) = (offset % PAGE, 0);
+    // No pool discard resets a page while these bytes land (`VICTORY_POOL_DISCARD`).
+    let _landing = pool_discard::Landing::enter();
     for (slice, n) in &runs {
         let k = (n * PAGE - within).min(data.len() - done);
         if let Some(at) = slice.section.window(slice.index, *n) {
@@ -878,6 +890,8 @@ pub(crate) struct PageWindow {
     view: Window,
     within: usize,
     len: usize,
+    /// No pool discard resets these pages while the window is open.
+    _landing: pool_discard::Landing,
 }
 
 enum Window {
@@ -909,6 +923,7 @@ pub(crate) fn page_window(pages: &[usize], offset: usize, len: usize) -> Option<
     let [(slice, n)] = runs.as_slice() else {
         return None;
     };
+    let landing = pool_discard::Landing::enter();
     let view = match slice.section.window(slice.index, *n) {
         Some(at) => Window::Kept(at, slice.section.clone()),
         None => Window::Own(View::map(slice, *n)?),
@@ -917,6 +932,7 @@ pub(crate) fn page_window(pages: &[usize], offset: usize, len: usize) -> Option<
         view,
         within: offset % PAGE,
         len,
+        _landing: landing,
     })
 }
 
@@ -1873,12 +1889,64 @@ mod pool_discard {
     /// Pages resident through the lasting views, discarded since the start,
     /// resets refused, rewritten within 5 s of their discard, and total
     /// `MEM_RESET` triggers.
-    static COUNTS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    static COUNTS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
     const RESIDENT: usize = 0;
     const DISCARDED: usize = 1;
     const FAILED: usize = 2;
     const REWRITTEN: usize = 3;
     const TRIGGERS: usize = 4;
+    /// Pages left alone because DirectStorage wrote them after they were
+    /// noted unshown.
+    const FRESH_SPARED: usize = 5;
+
+    /// Writers through a lasting view (low bits) and a reset in progress
+    /// (top bit): a reset waits for writers to leave, writers wait for a
+    /// reset to end. Nothing waits when the discard is off.
+    static GATE: AtomicU64 = AtomicU64::new(0);
+    const RESETTING: u64 = 1 << 63;
+
+    /// A write through a lasting view in progress (`enter`) or a reset
+    /// (`exclusive`); let go when dropped.
+    pub(crate) struct Landing(u64);
+
+    impl Landing {
+        pub(crate) fn enter() -> Landing {
+            if !on() {
+                return Landing(0);
+            }
+            loop {
+                let v = GATE.load(std::sync::atomic::Ordering::Acquire);
+                if v & RESETTING == 0
+                    && GATE
+                        .compare_exchange_weak(v, v + 1, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire)
+                        .is_ok()
+                {
+                    return Landing(1);
+                }
+                std::thread::yield_now();
+            }
+        }
+
+        pub(super) fn exclusive() -> Landing {
+            loop {
+                if GATE
+                    .compare_exchange_weak(0, RESETTING, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire)
+                    .is_ok()
+                {
+                    return Landing(RESETTING);
+                }
+                std::thread::yield_now();
+            }
+        }
+    }
+
+    impl Drop for Landing {
+        fn drop(&mut self) {
+            if self.0 != 0 {
+                GATE.fetch_sub(self.0, std::sync::atomic::Ordering::AcqRel);
+            }
+        }
+    }
 
     /// Pages that lost a view, to look at again later: when, and the page.
     static UNSHOWN: Mutex<VecDeque<(Instant, Slice)>> = Mutex::new(VecDeque::new());
@@ -1906,6 +1974,7 @@ mod pool_discard {
             if section.resident[k / 64].fetch_or(bit, Relaxed) & bit == 0 {
                 COUNTS[RESIDENT].fetch_add(1, Relaxed);
             }
+            section.fresh[k / 64].fetch_or(bit, Relaxed);
             if section.discarded[k / 64].fetch_and(!bit, Relaxed) & bit != 0 {
                 let at = DISCARDED_AT.lock().unwrap_or_else(|e| e.into_inner()).remove(&key(section, k));
                 if at.is_some_and(|at| at.elapsed() < Duration::from_secs(5)) {
@@ -1954,6 +2023,9 @@ mod pool_discard {
         {
             return;
         }
+        // From now on a write through the lasting view means the bytes are
+        // live again (a DirectStorage fill before the next map).
+        page.section.fresh[page.index / 64].fetch_and(!bit, Relaxed);
         {
             let mut queue = UNSHOWN.lock().unwrap_or_else(|e| e.into_inner());
             if queue.len() >= UNSHOWN_MOST {
@@ -1990,6 +2062,18 @@ mod pool_discard {
         m.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
         // SAFETY: a sized structure.
         (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.ullAvailPhys)
+    }
+
+    fn trim_only() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            let on = std::env::var_os("VICTORY_POOL_DISCARD_TRIM_ONLY").is_some_and(|v| v == "1");
+            tracing::info!(
+                on,
+                "VICTORY_POOL_DISCARD_TRIM_ONLY: pool pages given back keep their bytes and only leave the working set (no MEM_RESET)"
+            );
+            on
+        })
     }
 
     fn delay_setting() -> u64 {
@@ -2075,6 +2159,9 @@ mod pool_discard {
             // Pieces of 1,024 pages, the lock let go between them.
             for piece in due.chunks(1024) {
                 let physical = super::physical();
+                // No write through a lasting view lands while this piece is
+                // checked and reset; writes wait (a few ms at most).
+                let _resetting = Landing::exclusive();
                 // (lasting view base, first index, pages, section)
                 let mut runs: Vec<(usize, usize, usize, Arc<Section>)> = Vec::new();
                 for page in piece {
@@ -2088,8 +2175,12 @@ mod pool_discard {
                     let bit = 1u64 << (page.index % 64);
                     if base == 0
                         || section.resident[page.index / 64].load(Relaxed) & bit == 0
+                        || section.fresh[page.index / 64].load(Relaxed) & bit != 0
                         || !only_whole_views(&physical, page)
                     {
+                        if section.fresh[page.index / 64].load(Relaxed) & bit != 0 {
+                            COUNTS[FRESH_SPARED].fetch_add(1, Relaxed);
+                        }
                         continue;
                     }
                     section.resident[page.index / 64].fetch_and(!bit, Relaxed);
@@ -2109,7 +2200,15 @@ mod pool_discard {
                     // SAFETY: committed pages of our lasting view whose bytes
                     // are dead (above); the lock keeps maps of them out, and
                     // `_section` keeps the view.
-                    let reset = unsafe { VirtualAlloc(at, len, MEM_RESET, PAGE_READWRITE) };
+                    // `VICTORY_POOL_DISCARD_TRIM_ONLY=1`: the bytes are kept (no
+                    // MEM_RESET), the pages only leave the working set. A page
+                    // read again later then comes back as it was, which keeps
+                    // the title safe if "shown by no view" was not "dead".
+                    let reset = if trim_only() {
+                        at
+                    } else {
+                        unsafe { VirtualAlloc(at, len, MEM_RESET, PAGE_READWRITE) }
+                    };
                     if reset.is_null() && COUNTS[FAILED].fetch_add(1, Relaxed) == 0 {
                         tracing::warn!(
                             error = %std::io::Error::last_os_error(),
@@ -2161,7 +2260,11 @@ mod pool_discard {
             c.WorkingSetSize >> 20,
             c.PeakWorkingSetSize >> 20,
             free_mb,
-            if failed == 0 { String::new() } else { format!(", resets refused {failed}") },
+            if failed == 0 {
+                format!(", spared as freshly written {}", COUNTS[FRESH_SPARED].load(Relaxed))
+            } else {
+                format!(", resets refused {failed}, spared as freshly written {}", COUNTS[FRESH_SPARED].load(Relaxed))
+            },
             if below() == u64::MAX { "any".to_owned() } else { (below() >> 20).to_string() },
             if HELD_BY_RAM.load(Relaxed) { "; held now: RAM plentiful" } else { "" },
         )

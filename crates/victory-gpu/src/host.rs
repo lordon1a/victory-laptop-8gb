@@ -521,7 +521,11 @@ pub(crate) fn retire<T: 'static>(object: T) {
     let started = STARTED.load(Ordering::Acquire) + queued;
     if bury_lag() == 0 && started <= FINISHED.load(Ordering::Acquire) {
         RETIREMENTS[0].fetch_add(1, Ordering::Relaxed);
-        drop(object);
+        if reaper_on() {
+            reap(vec![Retired::Any(Box::new(object))]);
+        } else {
+            drop(object);
+        }
         return;
     }
     RETIREMENTS[1].fetch_add(1, Ordering::Relaxed);
@@ -537,7 +541,11 @@ pub(crate) fn retire_resource(object: ID3D12Resource) {
     let started = STARTED.load(Ordering::Acquire) + queued;
     if bury_lag() == 0 && started <= FINISHED.load(Ordering::Acquire) {
         RETIREMENTS[0].fetch_add(1, Ordering::Relaxed);
-        drop(object);
+        if reaper_on() {
+            reap(vec![Retired::Resource(object)]);
+        } else {
+            drop(object);
+        }
         return;
     }
     RETIREMENTS[1].fetch_add(1, Ordering::Relaxed);
@@ -559,16 +567,263 @@ fn bury_lag() -> u64 {
 /// numbers come in order, but for threads that overtake each other: one of
 /// those is dropped a little later than it could be.
 fn bury(finished: u64) {
+    let began = std::time::Instant::now();
     let finished = finished.saturating_sub(bury_lag());
-    let done: Vec<(u64, Retired)> = {
+    let done: Vec<Retired> = {
         let mut retired = RETIRED.lock().unwrap_or_else(|e| e.into_inner());
         let n = retired.iter().take_while(|(at, _)| *at <= finished).count();
         if n == 0 {
             return;
         }
-        retired.drain(..n).collect()
+        retired.drain(..n).map(|(_, obj)| obj).collect()
     };
-    drop(done);
+    let count = done.len() as u64;
+    if reaper_on() {
+        reap(done);
+    } else {
+        drop(done);
+    }
+    REAPER_STATS[0].fetch_add(began.elapsed().as_micros() as u64, Ordering::Relaxed);
+    REAPER_STATS[1].fetch_add(count, Ordering::Relaxed);
+}
+
+/// Queue shared between [`reap`] callers and the `victory-reaper` worker.
+struct ReapQueue {
+    batches: std::collections::VecDeque<Vec<Retired>>,
+    pending: usize,
+    closed: bool,
+}
+
+/// Background thread that drops retired host objects off the landing/submit
+/// path (`VICTORY_REAPER=1`; `alt`: 20 s off / 20 s on). Objects are handed
+/// over only after their fence and [`bury_lag`] have passed, never earlier.
+struct Reaper {
+    shared: std::sync::Arc<(Mutex<ReapQueue>, std::sync::Condvar)>,
+    pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl Reaper {
+    fn spawn(name: &str) -> Option<Self> {
+        let shared = std::sync::Arc::new((
+            Mutex::new(ReapQueue {
+                batches: std::collections::VecDeque::new(),
+                pending: 0,
+                closed: false,
+            }),
+            std::sync::Condvar::new(),
+        ));
+        let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let w_shared = std::sync::Arc::clone(&shared);
+        let w_pending = std::sync::Arc::clone(&pending);
+        let handle = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                loop {
+                    let batch = {
+                        let mut q = w_shared.0.lock().unwrap_or_else(|e| e.into_inner());
+                        while q.batches.is_empty() && !q.closed {
+                            q = w_shared.1.wait(q).unwrap_or_else(|e| e.into_inner());
+                        }
+                        match q.batches.pop_front() {
+                            Some(batch) => {
+                                q.pending = q.pending.saturating_sub(batch.len());
+                                w_pending.store(q.pending, Ordering::Relaxed);
+                                batch
+                            }
+                            None => break,
+                        }
+                    };
+                    let count = batch.len() as u64;
+                    let began = std::time::Instant::now();
+                    drop(batch);
+                    let us = began.elapsed().as_micros() as u64;
+                    REAPER_STATS[2].fetch_add(us, Ordering::Relaxed);
+                    REAPER_STATS[3].fetch_add(count, Ordering::Relaxed);
+                }
+            })
+            .ok()?;
+        Some(Self {
+            shared,
+            pending,
+            handle: Mutex::new(Some(handle)),
+        })
+    }
+
+    fn send(&self, batch: Vec<Retired>) {
+        if batch.is_empty() {
+            return;
+        }
+        let queued = {
+            let mut q = self.shared.0.lock().unwrap_or_else(|e| e.into_inner());
+            if q.closed {
+                drop(q);
+                drop(batch);
+                return;
+            }
+            q.pending += batch.len();
+            let pending = q.pending;
+            q.batches.push_back(batch);
+            self.pending.store(pending, Ordering::Relaxed);
+            self.shared.1.notify_one();
+            pending as u64
+        };
+        REAPER_STATS[4].fetch_max(queued, Ordering::Relaxed);
+    }
+
+    fn pending_len(&self) -> usize {
+        self.pending.load(Ordering::Relaxed)
+    }
+
+    /// Signals the worker to drain queued batches and exit without blocking.
+    /// Used from `atexit`, where joining a thread terminated by `ExitProcess`
+    /// could deadlock.
+    fn signal_close_nonblocking(&self) {
+        if let Ok(mut q) = self.shared.0.try_lock() {
+            q.closed = true;
+            self.shared.1.notify_all();
+        }
+    }
+
+    /// Signals the worker to drain all queued batches and waits for it to exit.
+    fn shutdown(&self) {
+        {
+            let mut q = self.shared.0.lock().unwrap_or_else(|e| e.into_inner());
+            q.closed = true;
+            self.shared.1.notify_all();
+        }
+        if let Some(handle) = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for Reaper {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// Global reaper worker, lazily created only when `VICTORY_REAPER` is enabled.
+static REAPER: OnceLock<Reaper> = OnceLock::new();
+
+/// Per-5s bury/reaper counters:
+/// 0: main-path `bury` time (µs), 1: main-path objects buried,
+/// 2: reaper-thread drop time (µs), 3: reaper-thread objects dropped,
+/// 4: peak pending queue length (objects).
+static REAPER_STATS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+unsafe extern "C" {
+    fn atexit(cb: extern "C" fn()) -> std::ffi::c_int;
+}
+
+extern "C" fn reaper_atexit() {
+    if let Some(reaper) = REAPER.get() {
+        reaper.signal_close_nonblocking();
+    }
+}
+
+/// 0 off (default), 1 on (`VICTORY_REAPER=1`), 2 alternating (`VICTORY_REAPER=alt`).
+fn reaper_mode() -> u8 {
+    static MODE: OnceLock<u8> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        let asked = match std::env::var("VICTORY_REAPER").as_deref() {
+            Ok("1") => 1,
+            Ok("alt") => 2,
+            _ => 0,
+        };
+        if asked == 0 {
+            return 0;
+        }
+        let Some(reaper) = Reaper::spawn("victory-reaper") else {
+            return 0;
+        };
+        let _ = REAPER.set(reaper);
+        // SAFETY: `reaper_atexit` is a plain `extern "C"` function that uses
+        // only non-blocking `try_lock` + `notify_all`.
+        unsafe {
+            atexit(reaper_atexit);
+        }
+        tracing::info!(
+            "host objects that are let go are dropped by a thread of their own (VICTORY_REAPER={})",
+            if asked == 1 { "1" } else { "alt" }
+        );
+        asked
+    })
+}
+
+/// Whether retired host objects are currently handed to the `victory-reaper`
+/// thread (`VICTORY_REAPER=1`; `alt`: 20 s off, 20 s on). Off by default.
+fn reaper_on() -> bool {
+    match reaper_mode() {
+        0 => false,
+        1 => true,
+        _ => {
+            static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
+            let on = (EPOCH.get_or_init(std::time::Instant::now).elapsed().as_secs() / 20) % 2 == 1;
+            static LAST: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+            if LAST.swap(u8::from(on), Ordering::Relaxed) != u8::from(on) {
+                tracing::info!(
+                    "host objects let go are dropped by their own thread from now (VICTORY_REAPER=alt): {}",
+                    if on { "ON" } else { "off, by the thread that lets them go as usual" }
+                );
+            }
+            on
+        }
+    }
+}
+
+fn reaper_mode_label() -> &'static str {
+    match reaper_mode() {
+        0 => "off",
+        1 => "1",
+        _ => {
+            if reaper_on() {
+                "alt:on"
+            } else {
+                "alt:off"
+            }
+        }
+    }
+}
+
+/// Hands `objects` to the `victory-reaper` thread if active, otherwise drops
+/// them on the calling thread.
+fn reap(objects: Vec<Retired>) {
+    if objects.is_empty() {
+        return;
+    }
+    if let Some(reaper) = REAPER.get() {
+        reaper.send(objects);
+    } else {
+        drop(objects);
+    }
+}
+
+/// 5-second summary of `bury` main-path time, `victory-reaper` thread time,
+/// and pending queue length.
+fn bury_line(frames: f64) {
+    let main_us = REAPER_STATS[0].swap(0, Ordering::Relaxed);
+    let main_n = REAPER_STATS[1].swap(0, Ordering::Relaxed);
+    let reaper_us = REAPER_STATS[2].swap(0, Ordering::Relaxed);
+    let reaper_n = REAPER_STATS[3].swap(0, Ordering::Relaxed);
+    let peak = REAPER_STATS[4].swap(0, Ordering::Relaxed);
+    let queued = REAPER.get().map_or(0, Reaper::pending_len);
+    if main_n == 0 && reaper_n == 0 && queued == 0 {
+        return;
+    }
+    tracing::info!(
+        "bury/reaper (5s, VICTORY_REAPER={}): main {:.2} ms/frame ({:.1} ms, {:.0} objs/frame); reaper {:.2} ms/frame ({:.1} ms, {:.0} objs/frame); queue {} (peak {})",
+        reaper_mode_label(),
+        main_us as f64 / 1e3 / frames,
+        main_us as f64 / 1e3,
+        main_n as f64 / frames,
+        reaper_us as f64 / 1e3 / frames,
+        reaper_us as f64 / 1e3,
+        reaper_n as f64 / frames,
+        queued,
+        peak,
+    );
 }
 
 /// Objects [`retire`] dropped at once (no submission was running) and
@@ -9295,6 +9550,7 @@ impl Meter {
         crate::shadow::exact_line(frames);
         crate::descriptor::sync_line(frames);
         late_line(frames);
+        bury_line(frames);
         crate::queue::behind_line(frames);
         card_clock_line(frames, ms);
         #[cfg(feature = "diagnostics")]
@@ -11158,6 +11414,82 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         assert_eq!(ram_idle_ms(Some(0)), 2_000);
         // Missing falls back to normal
         assert_eq!(ram_idle_ms(None), 10_000);
+    }
+
+    #[test]
+    fn reaper_drops_on_worker_thread_and_shuts_down_cleanly() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Probe {
+            dropped: Arc<AtomicUsize>,
+            caller_tid: std::thread::ThreadId,
+            off_thread: Arc<AtomicUsize>,
+        }
+        impl Drop for Probe {
+            fn drop(&mut self) {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                if std::thread::current().id() != self.caller_tid {
+                    self.off_thread.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let off_thread = Arc::new(AtomicUsize::new(0));
+        let caller_tid = std::thread::current().id();
+
+        let reaper = super::Reaper::spawn("victory-reaper-test").expect("spawn reaper");
+        for _ in 0..4 {
+            let batch: Vec<super::Retired> = (0..64)
+                .map(|_| {
+                    super::Retired::Any(Box::new(Probe {
+                        dropped: Arc::clone(&dropped),
+                        caller_tid,
+                        off_thread: Arc::clone(&off_thread),
+                    }))
+                })
+                .collect();
+            reaper.send(batch);
+        }
+        reaper.shutdown();
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 256);
+        assert_eq!(off_thread.load(Ordering::Relaxed), 256);
+        assert_eq!(reaper.pending_len(), 0);
+    }
+
+    #[test]
+    fn bury_respects_finished_fence_and_lag() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Count(Arc<AtomicUsize>);
+        impl Drop for Count {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let lag = super::bury_lag();
+        // Start well above any prior test values.
+        let base = 1_000_000u64;
+        {
+            let mut retired = super::RETIRED.lock().unwrap_or_else(|e| e.into_inner());
+            retired.clear();
+            retired.push_back((base, super::Retired::Any(Box::new(Count(Arc::clone(&dropped))))));
+            retired.push_back((base + 5, super::Retired::Any(Box::new(Count(Arc::clone(&dropped))))));
+        }
+        // Before `base + lag`, nothing may be dropped.
+        super::bury(base + lag - 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        // At `base + lag`, only the first item is eligible.
+        super::bury(base + lag);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        // At `base + 5 + lag`, the second item is eligible too.
+        super::bury(base + 5 + lag);
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
     }
 }
 
