@@ -2,6 +2,9 @@
 
 Ölçüt: bizim açık dünya darboğazına (CPU kopya/hazırlık 89-122 ms, kopya 35-48 ms, geri kopya 14-20 ms; GPU bekleme 4-6 ms) oturuyor mu + gerçek ölçüm var mı + mühendislik derinliği.
 
+## ★ 27.11 09:55 GÜNCELLEME — kritik yol bulundu (H29)
+Profil: oyun thread'leri zamanının %67'si bizim çizim çevirimizde (execute_indirect > bind %21, gönderim %13). Kopya/geri kopya/doku işleri kare kazancı vermedi (WINDOW_KB, TEXTURE_NO_WAIT, DESC_MARKS). **Yeni 1. sıra: bind/descriptor maliyeti + kilit çekişmesi** (HostHeap::keep/retire_resource mutex, shadow::lookup RwLock, watch::guards). 2.: gönderimi oyun thread'inden almak (ASYNC_SUBMIT). Akıllı kurye ve kopya işleri kritik yol bu tarafa geçince ikinci aşama.
+
 ## A. Gerçek mühendislik, asıl darboğaza oturuyor
 1. **Akıllı kurye (GPU-yazılı aralığı katman tekrar okumasın/yüklemesin)** — shadPS4 modeli (gpu_modified_ranges, 2 yılda üretime girdi), Ryujinx/Xenia aynı fikir. VIctory'de kanıt: fxceless #1169 oyun geri kopyanın %0.1-0.3'ünü okuyor, katman okumalarının %92'si kendi çıktısı. Adımlar: (a) LAND_ECHO=1 kodsuz [TEST EDİLİYOR], (b) LAND_SKIP=1, (c) land_back + note_landing (PC kopyaları), (d) tam GPU-kirli takip. Risk: bayat veri. H22, H23, H25.
 2. **Op-lite SOFT_VIEWS=copies paketi (bc264a41)** — re-upload 6.4 GB → <15 MB, 4080S 59-66 → 46-49 ms. Aynı sorunu (tekrar yükleme) başka yoldan çözmüş; 1 ile birleşebilir. Tek tek alınmalı.
