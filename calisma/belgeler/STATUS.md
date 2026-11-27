@@ -1,5 +1,7 @@
 # STATUS — victory-fork katkısı
 
+## ⏸ 27.11 12:30 DURAKLATILDI (Yiğit: limitler bitti). Test zinciri yok, 3 saatlik tarama cron'u silindi, Neon 6a sayaç görevi iptal edildi (vw-avatar'da değişiklik bırakmadı, git temiz). Devam edince: 6a WC sahibi sayacı (Neon kod) → WINDOW_REUSE → LIST_HOLD → #3379+#1443 → XMEM_LAZY ölçümü; tam pipeline ön yüklemesi (H43) PC boşken. Neptune 28.11 17:00 kaynağı → Neon güvenlik + 'duplicate memory' incelemesi.
+
 ## ★ PLAN 27.11 10:55 (Yiğit: "planlara ekle, plana göre git, çok detaylı, hiçbir şeyi atlama")
 Hedef: Jason açık dünyada (1) ortalama kare 100 → <80 ms, (2) takılmaları (12 → 8 fps düşüşleri) azaltmak.
 Kanıtlı: kritik yol oyun thread'lerinde bizim çeviri (H29: %67 bizim kod; bind %21, gönderim %13, kilitler); kopya/doku/geri kopya kareyi belirlemiyor (H28). RAM (H34): private 17 GB, RAM'de yalnız 5.4 GB, ~11.6 GB sayfa dosyasında; diskten okuma patlamaları ↔ 100-150 ms pencereler. Tüm koşular BelowNormal öncelikteydi (H34).
@@ -9,7 +11,8 @@ Adımlar (sırayla, her biri A/B + kare kontrolü + TEST_DEFTERI + repo):
  3. [YAPILDI 11:20, KABUL] Öncelik: Normal (p99 216 → 130 / 269 → 184 ms, >250 ms 16 → 2) → kosu.ps1 varsayılanı.
  1b. [YAPILDI 11:41] ak zinciri: RETIRE_BATCH+LOOSE_FOUND RED (iki odada kötü). PORT_GUARD: ak1-pg en iyi cam koşusu (94.8 ms, p99 119) ama ak2-pg kirli+kötü → al zincirinde 3× tekrar. İzleyici betikler sonraki koşuya taşıyordu → PID'e bağlandı.
  4. [YAPILDI 12:01] al zinciri: temizlik boş RAM'i ve kareyi değiştirmedi (RAM'i oyun dolduruyor, 22-39 bin sayfa/sn diskten okuma = H37). PORT_GUARD 7 koşuda kazanç yok → kapalı. SIRADAKİ: 6 (RAM). Yiğit 'bitince konuşalım' dedi → onay bekleniyor. Yiğit izin verdi (T3 hariç her şey): WhatsApp, GameBar/Spotify widget, Widgets, Unity relay, SnippingTool kapatıldı (webview2 88 → 6, boş RAM 8.9 GB oyun kapalıyken). Eski plan: Arka plan RAM A/B (Marvisak #1820: 2.5 GB boşaltınca 4.6 → 7.5-8.6 fps): koşu öncesi hangi süreçlerin RAM tuttuğunu listele; Yiğit'e hangi programları kapatabileceğini sor (kapatmayı ben yapmam) → aynı ayarla önce/sonra.
- 5. TEXTURE_NO_WAIT'i p99/takılma ölçüsüyle yeniden A/B.
+ ★ 12:35 YENİ KURAL (Yiğit): her testten önce Neon ön kontrol. H42: hazır bayrak kalmadı; 5 (TEXTURE_NO_WAIT), 6b-d, 7b, 8, 9 ATLANDI. Yeni sıra: 6a WC sahibi sayacı (Neon kod) → WINDOW_REUSE → LIST_HOLD → #3379+#1443 → XMEM_LAZY_COMMIT ölçümü.
+ 5. [ATLANDI H42] TEXTURE_NO_WAIT'i p99/takılma ölçüsüyle yeniden A/B.
  6. RAM düşürme: (0) Marvisak XMEM_LAZY_COMMIT (H36, Sol en güçlü; #3435 ölçüm bayrağı önce), (a) WC 7.9 GiB'ın sahibini ölç (32/64 MiB WC grupları kimin: D3D12 upload/GPU_UPLOAD/WINDOWS_BAR?), (b) WINDOW_REUSE (fxceless #1362) A/B, (c) TEXTURE_BUDGET_MB 768 A/B, (d) LIST_POOL=0 maliyet/kazanç.
  7. Yeni profil (kazananlarla) → bind'da sıradaki (H31/H35): Marvisak #3379 HostList::keep COM tekilleştirme + CBV araması, fxceless #1443 bind geçici tahsisleri, Op-lite LIST_HOLD, fxceless #1429 toplu descriptor iadesi, ListViews'ı kare boyunca tutma, Marvisak #2821 kilitsiz hazır slot, avatarmanz #96 havuz parçalama.
  7b. Takılma: fxceless #1442 pipeline kitaplığı kilidini ada göre ayırma (5060 Laptop 7.6 sn → 26 µs bekleme).
