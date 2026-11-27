@@ -62,3 +62,14 @@ Her adımdan önce: BULGULAR.md'ye bak + ajana "kim yaptı/ölçtü" taraması (
 ## Adım 2 sonucu (27.11 01:50) — küçük tamponları karta al
 - MIN_KB=64 + MB=1024: 130 → 74-80 ms (7.5 → 13 fps). Görüntü bedeli: tel/INMATE kaybı (SKIP_WC_BACK yarışı), tişört/saç ışığı farkı.
 - Temiz aday: min64 + CARD_STEPS=1 + TEXTURE_NO_WAIT=0 (mkf-x2, 78 ms, tel + INMATE var, saç doğru koyu). Kabul için 2. tur + SKIP_WC_BACK=0 varyantı.
+
+## Adım 7 — FSR 3 frame gen (Yiğit 27.11 03:00, BULGULAR E2/E3)
+- 7a. Ölçüm: OWN_UPSCALER=0 (konsol FSR yolu açık) maliyeti — FG'nin girdisi (MV/depth) bu yoldan geliyor.
+- 7b. Port (Neon, ayrı dal, varsayılan kapalı): gleaf-6 252ccc10 framegen.rs + hle fidelityfx.rs + Marvisak #1868 (RGB9E5→FP16) + 3.x provider seçimi + tek present listesi (late_free_present çökmesi).
+- 7c. SDK: FidelityFX SDK kaynaktan derleme (hazır DLL kuralı) — Yiğit onayı ile AMD imzalı DLL de olabilir.
+- 7d. A/B: gösterilen fps, gerçek fps, kare (ghosting/HUD), 10 dk çökme.
+- Not: 13-14 fps tabanda gecikme düşmez; görüntü akıcılaşır.
+
+## Adım 8 — görüntü ayarları (Yiğit 27.11 03:02)
+- 8a. Motion blur maliyeti: `victory translate` ile hash→isim listesi, MotionBlur shader'larının kart süresi (PIPELINE_TIMING); oynarken menüden 0 (BULGULAR D5). Beklenen: görüntü belirgin temiz, fps +0.5 civarı.
+- 8b. Çözünürlük: şu an RENDER_SCALE=0.5 (OWN_UPSCALER). Eğri: 0.5 = 115/113, 0.6 = 121/118, 0.75 açılışta çöktü (TEST_DEFTERI s.24); DISPLAY_MODE=1280x720 ret (oyun yok sayıyor). Sırada: 0.4 ve 0.33 A/B + kare (bulanıklık). Not: kart artık 33 ms / kare ~75 ms → kazanç sınırlı bekleniyor; ölçmeden bilinmez.

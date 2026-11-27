@@ -103,6 +103,9 @@ if (-not $DryRun) {
     # PC kullanımı kaydı (26.11): Yiğit koşu sırasında PC'yi kullanabilir; bozulan koşuyu bu kayıt ayıklar.
     Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
         (Join-Path $PSScriptRoot 'kullanim_izle.ps1'), '-Tag', $Tag, '-Dakika', ($Dakika + 2) | Out-Null
+    # Isı/kısma ve diskten sayfa okuma kaydı (27.11): uzun koşuda fps düşüşü RAM mı ısı mı.
+    Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+        (Join-Path $PSScriptRoot 'isi_izle.ps1'), '-Tag', $Tag, '-Dakika', ($Dakika + 2) | Out-Null
     # Dünya göründükten DunyaSn sonra bitir (Yiğit 26.11: fps oturuyor; 0 = tam süre, ör. profil koşuları).
     if ($DunyaSn -gt 0) {
         Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',

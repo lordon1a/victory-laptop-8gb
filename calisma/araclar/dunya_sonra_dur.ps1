@@ -1,4 +1,4 @@
-# Koşuyu dünya göründükten -Saniye sonra bitirir (Yiğit 26.11: dünyaya girince fps oturuyor, uzun koşu vakit kaybı).
+﻿# Koşuyu dünya göründükten -Saniye sonra bitirir (Yiğit 26.11: dünyaya girince fps oturuyor, uzun koşu vakit kaybı).
 # kosu.ps1 başlatır. Koşu klasörünü (*_<Tag>) bekler, run.log'da ilk dünya karesini (draw >= 2000) bulur,
 # -Saniye sonra victory süreçlerini kapatır. Dünya gelmezse dokunmaz (olcum_profili'nin süre sınırı geçerli).
 param([Parameter(Mandatory)][string]$Tag, [int]$Saniye = 60, [int]$Bekle = 400)
@@ -22,6 +22,13 @@ while (-not $dunya -and ((Get-Date) - $bas).TotalSeconds -lt $Bekle) {
 }
 if (-not $dunya) { return }
 "dünya: $(Get-Date -Format HH:mm:ss), $Saniye sn sonra durdurulacak" | Set-Content -Encoding utf8 (Join-Path $klasor.FullName 'dunya_sonra_dur.txt')
-Start-Sleep $Saniye
-Get-Process victory, game_scarlett_master -ErrorAction SilentlyContinue | Stop-Process -Force
+# 27.11: yalnız BU koşunun süreçlerini kapat. Eskisi uyuyup ada göre öldürüyordu; koşu önce bitince
+# SONRAKİ koşunun oyununu kapatıyordu (pda-pool, pdb-pool, pdb-taban 'çökmeleri').
+$bizim = @(Get-Process victory, game_scarlett_master -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+$son = (Get-Date).AddSeconds($Saniye)
+while ((Get-Date) -lt $son) {
+    Start-Sleep 1
+    if (-not ($bizim | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })) { 'koşu kendi bitti, dokunulmadı' | Add-Content -Encoding utf8 (Join-Path $klasor.FullName 'dunya_sonra_dur.txt'); return }
+}
+$bizim | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
 "durduruldu: $(Get-Date -Format HH:mm:ss)" | Add-Content -Encoding utf8 (Join-Path $klasor.FullName 'dunya_sonra_dur.txt')
