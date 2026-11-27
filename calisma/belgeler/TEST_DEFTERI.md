@@ -122,3 +122,13 @@ Kareler: 5/5 aynı yer (yatak odası, pencere), görüntü temiz (ac2-tab kare k
 | ad2-tab | 148.0 | 121.9 | 29.2 / 72.8 | 54.7 | 13.6 | 8362 |
 | ad2-w4k | 122.8 | 101.2 | 28.5 / 66.7 | 31.4 | 14.2 | 5996 |
 Kareler 6/6 aynı yer, temiz. **LAND_ECHO=1: 4/4 çift tabandan hızlı** (ac1 87.8/95.8, ac2 152/173, ad1 93/130, ad2 134/148), kopya MB 66-68 vs 72-84, ~3 MB/kare tekrar gönderim kesiliyor. Uyarı: taban koşularında çizim medyanı daha yüksek (7713/8362, 6500 altı kare yok) → kazancın bir kısmı sahne gürültüsü olabilir. Kod tarafı: avatarmanz'ın varsayılanı 1, bizdeki 0 -Safe kalıntısıydı → düşük risk. **kosu.ps1 tabanına LAND_ECHO=1 alındı.** Başkasında: ölçülmemiş. WINDOW_KB 4096: eski tabana göre 3/4 iyi, eco'ya göre fark yok → yeni taban üstünde ae1/ae2 ile ölçülüyor. Gözlem: geri kopya 14-15 ms ama yalnız 3.5 MB → bayt değil bekleme maliyeti (Neon'a soruldu).
+
+## 27.11 09:30 DÜZELTME + ae1/ae2 (yeni taban LAND_ECHO=1 vs WINDOW_KB 4096)
+**Yöntem hatası bulundu:** her koşunun kare yakalayıcısı sonraki koşularda da çalışıyor → `kareler` klasörlerine sonraki koşuların kareleri de düşüyor; önceki "6/6 aynı yer" kontrolü yanlış koşuların karesine bakmıştı. Doğru kareyle (koşunun kendi süresi içindeki son kare, sheet2.py) bakınca **Jason iki farklı odada uyanıyor: yatak odası (~5900-6100 çizim) ve cam kapılı oda (~7700-10000 çizim).** Cam oda: ad1-tab, ad2-tab, ae1-tab (+ ac2-eco 8242, ac2-tab 10059 çizime göre). Beyaz kareler yükleme geçişi, bozulma değil.
+| Koşu | oda | kare ms | hazırlık | kopya ms / MB | doku | çizim |
+|---|---|---|---|---|---|---|
+| ae1-tab (yeni taban) | cam | 102.2 | 76.7 | 29.6 / 89.2 | 5.8 | 8324 |
+| ae1-w4k | yatak | 112.8 | 92.0 | 30.4 / 68.0 | 22.8 | 6054 |
+| ae2-tab (yeni taban) | yatak | 107.9 | 88.8 | 27.0 / 66.6 | 23.3 | 6014 |
+| ae2-w4k | yatak | 113.1 | 85.7 | 27.1 / 67.4 | 26.1 | 5988 |
+**LAND_ECHO yeniden değerlendirme (oda içinde):** yatak: eco 87.8 / 93.4 / 133.7 vs eski taban 95.8 (tek); cam: eco 152 / 102 vs eski taban 173 / 130 / 148. Yön aynı (eco ≤ taban) ama önceki "4/4" iddiası oda farkıyla karışıktı → **kanıt zayıf, ayar kalıyor** (avatarmanz varsayılanı, hiçbir odada kötü değil, ~3 MB/kare kesiyor). **WINDOW_KB 4096 RET:** aynı odada (yatak, yeni taban) 107.9 vs 112.8 / 113.1, kopya MB aynı (66-68); MKmajster'in 3070'teki 157 → 147 kazancı bizde yok (bizim kopya zaten 67 MB, onlarınki 154 MB idi). +0.5 GB RAM bedeli boşa. Görüntü: ae2-tab yatak odasında pencere altı duvarda soyuk boya izi var, ae2-w4k ve diğer yatak karelerinde yok → doku/decal akış zamanlaması (doğrulanmadı). Ayrıca gözlem: aynı ayarla ad2 > ad1 (≈ +30-40 ms), zaman/ısı etkisi olabilir.

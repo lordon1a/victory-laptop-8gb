@@ -143,6 +143,6 @@ Watcher yeni satırları AYNI sütunlarla ekler (durum = bulundu, güvenlik = Ya
 | Series S çok-düzlemli present'i beklemeden gönder | edsuuu 511f629a (H26) | commit notu ~20 ms/kare bekleme | late_free_present var, bu yolda mı? doğrulanmadı | SIRA 2b (önce kodu oku: bizde senkron mu) |
 | CARD_COMPARE_JOIN | edsuuu 2f59f1df (H26) | ölçülmemiş | yok | SIRA 4 |
 | ASYNC_SUBMIT | edsuuu (fxceless f85101b6) (H26) | 4060 Ti hapishane 22.9 → 24.3, min 14.4 → 18.6 | yok | SIRA 5 (16 GB'ta thread çekişmesi riski) |
-| WINDOW_KB 256 → 4096 | MKmajster (fxceless #1083) | 3070 8 GB + 16 GB: 153.7 → 88.6 MB/kare, 157 → 147 ms, +0.5 GB | ayar var | **SIRA 2** (ucuz A/B, açık dünya) |
+| WINDOW_KB 256 → 4096 | MKmajster (fxceless #1083) | 3070 8 GB + 16 GB: 153.7 → 88.6 MB/kare, 157 → 147 ms, +0.5 GB | ayar var | **RET 27.11 09:30** (Jason yatak odası 107.9 vs 112.8/113.1, kopya MB aynı; bizim kopya zaten 67 MB) |
 | cool_fox büyük tampon VRAM rezervi | cool_fox #40 / 42ac5626b | 4060 Laptop 8 GB: 348 → 88 ms | yok | önce bizde büyük tampon RAM'e düşüyor mu sayaç |
 | XCL #2844 CUSTOM L0 pencere | xcl-dev/xcl | 5070 Ti dünya 0.62 → 3.03 fps; GPU 1427 → 165 ms | yok | incele (yeni proje, güvenlik) |
