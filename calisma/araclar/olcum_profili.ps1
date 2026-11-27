@@ -29,6 +29,9 @@ param(
     # 24 → 32 (26.11, Yiğit "devam" onayı; AvatarManz tabanında VRAM commit payı büyük, fiziksel koruma MinFreeRamGB aynen).
     [ValidateRange(8, 32)]
     [double]$MaxCommitGB,
+    # Süreç önceliği (27.11: guvenli_baslat varsayılanı BelowNormal'dı; Normal/AboveNormal A/B için).
+    [ValidateSet('Idle', 'BelowNormal', 'Normal', 'AboveNormal', 'High')]
+    [string]$Priority,
     [switch]$DryRun
 )
 
@@ -430,6 +433,7 @@ try {
     if ($PSBoundParameters.ContainsKey('MinFreeRamGB')) { $guard.MinFreeRamGB = $MinFreeRamGB }
     if ($PSBoundParameters.ContainsKey('SustainSeconds')) { $guard.SustainSeconds = $SustainSeconds }
     if ($PSBoundParameters.ContainsKey('MaxCommitGB')) { $guard.MaxCommitGB = $MaxCommitGB }
+    if ($PSBoundParameters.ContainsKey('Priority')) { $guard.Priority = $Priority }
     try { & (Join-Path $PSScriptRoot 'guvenli_baslat.ps1') @guard }
     finally {
         foreach ($name in $envNames) { [Environment]::SetEnvironmentVariable($name, $original[$name], 'Process') }

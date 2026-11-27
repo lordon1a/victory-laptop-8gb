@@ -1673,6 +1673,36 @@ mod tests {
             desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
         );
     }
+
+    #[test]
+    fn frame_time_stats_percentiles_and_stutters() {
+        assert_eq!(super::frame_time_stats(&[]), None);
+
+        let small = super::frame_time_stats(&[10_000, 10_000, 10_000, 10_000, 100_000]).unwrap();
+        assert_eq!(small.count, 5);
+        assert_eq!(small.p50_us, 10_000);
+        assert_eq!(small.p90_us, 100_000);
+        assert_eq!(small.p99_us, 100_000);
+        assert_eq!(small.max_us, 100_000);
+        assert_eq!(small.over_2x_median, 1);
+        assert_eq!(small.over_100_ms, 0);
+        assert_eq!(small.over_150_ms, 0);
+        assert_eq!(small.over_250_ms, 0);
+
+        let mut mixed = vec![16_000u32; 90];
+        mixed.extend([40_000; 7]);
+        mixed.extend([300_000, 120_000, 180_000]);
+        let stats = super::frame_time_stats(&mixed).unwrap();
+        assert_eq!(stats.count, 100);
+        assert_eq!(stats.p50_us, 16_000);
+        assert_eq!(stats.p90_us, 16_000);
+        assert_eq!(stats.p99_us, 180_000);
+        assert_eq!(stats.max_us, 300_000);
+        assert_eq!(stats.over_2x_median, 10);
+        assert_eq!(stats.over_100_ms, 3);
+        assert_eq!(stats.over_150_ms, 2);
+        assert_eq!(stats.over_250_ms, 1);
+    }
 }
 
 /// The batches of clamped records in one scratch buffer
@@ -9556,6 +9586,117 @@ struct Presenter {
     panel: panel::Panel,
 }
 
+/// Summary of per-frame intervals (in microseconds) over one log period.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FrameTimeStats {
+    count: usize,
+    p50_us: u32,
+    p90_us: u32,
+    p99_us: u32,
+    max_us: u32,
+    over_2x_median: usize,
+    over_100_ms: usize,
+    over_150_ms: usize,
+    over_250_ms: usize,
+}
+
+/// Computes frame-time percentiles and stutter counts from microsecond samples.
+fn frame_time_stats(samples_us: &[u32]) -> Option<FrameTimeStats> {
+    if samples_us.is_empty() {
+        return None;
+    }
+    let mut sorted = samples_us.to_vec();
+    sorted.sort_unstable();
+    let n = sorted.len();
+    let pct = |p: usize| -> u32 {
+        let idx = n.saturating_mul(p).div_ceil(100).saturating_sub(1).min(n - 1);
+        sorted[idx]
+    };
+    let p50_us = pct(50);
+    let p90_us = pct(90);
+    let p99_us = pct(99);
+    let max_us = sorted[n - 1];
+    let twice_median = p50_us.saturating_mul(2);
+    let mut over_2x_median = 0;
+    let mut over_100_ms = 0;
+    let mut over_150_ms = 0;
+    let mut over_250_ms = 0;
+    for &us in &sorted {
+        if us > twice_median {
+            over_2x_median += 1;
+        }
+        if us > 100_000 {
+            over_100_ms += 1;
+        }
+        if us > 150_000 {
+            over_150_ms += 1;
+        }
+        if us > 250_000 {
+            over_250_ms += 1;
+        }
+    }
+    Some(FrameTimeStats {
+        count: n,
+        p50_us,
+        p90_us,
+        p99_us,
+        max_us,
+        over_2x_median,
+        over_100_ms,
+        over_150_ms,
+        over_250_ms,
+    })
+}
+
+/// Background writer for `VICTORY_FRAME_TIMES=<path>`: appends each frame
+/// interval (ms, one per line) in batches off the present thread.
+fn frame_times_writer() -> Option<&'static std::sync::mpsc::SyncSender<Vec<u32>>> {
+    static WRITER: OnceLock<Option<std::sync::mpsc::SyncSender<Vec<u32>>>> = OnceLock::new();
+    WRITER
+        .get_or_init(|| {
+            let path = std::env::var_os("VICTORY_FRAME_TIMES")?;
+            if path.is_empty() {
+                return None;
+            }
+            let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u32>>(16);
+            let spawn = std::thread::Builder::new()
+                .name("victory-frame-times".into())
+                .spawn(move || {
+                    use std::io::Write;
+                    let file = match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %std::path::Path::new(&path).display(),
+                                error = %e,
+                                "VICTORY_FRAME_TIMES: cannot open file"
+                            );
+                            return;
+                        }
+                    };
+                    let mut out = std::io::BufWriter::new(file);
+                    while let Ok(batch) = rx.recv() {
+                        for us in batch {
+                            if writeln!(out, "{:.3}", f64::from(us) / 1000.0).is_err() {
+                                return;
+                            }
+                        }
+                        if out.flush().is_err() {
+                            return;
+                        }
+                    }
+                });
+            match spawn {
+                Ok(_) => Some(tx),
+                Err(e) => {
+                    tracing::warn!(error = %e, "VICTORY_FRAME_TIMES: cannot spawn writer thread");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
 /// The frame rate, shown in the window's caption every second and logged
 /// every few seconds.
 struct Meter {
@@ -9565,6 +9706,10 @@ struct Meter {
     copy_stats_frames: u64,
     drawn: u64,
     logged: std::time::Instant,
+    /// Timestamp of the previous presented frame, for per-frame delta measurement.
+    last_frame: Option<std::time::Instant>,
+    /// Per-frame intervals in microseconds accumulated over the current 5 s log period.
+    frame_times: Mutex<Vec<u32>>,
     /// The caption the window had, once read.
     caption: Option<Vec<u16>>,
 }
@@ -9579,6 +9724,8 @@ impl Meter {
             copy_stats_frames: 0,
             drawn: crate::draw::drawn(),
             logged: now,
+            last_frame: None,
+            frame_times: Mutex::new(Vec::new()),
             caption: None,
         }
     }
@@ -9595,6 +9742,11 @@ impl Meter {
         tracing::debug!(target: "victory_gpu::frame", token = crate::frame::current(), "present");
         #[cfg(feature = "diagnostics")]
         crate::copystat::presented();
+        let now = std::time::Instant::now();
+        if let Some(prev) = self.last_frame.replace(now) {
+            let us = now.saturating_duration_since(prev).as_micros().min(u128::from(u32::MAX)) as u32;
+            self.frame_times.lock().unwrap_or_else(|e| e.into_inner()).push(us);
+        }
         self.frames += 1;
         #[cfg(feature = "diagnostics")]
         {
@@ -9827,6 +9979,26 @@ impl Meter {
                 placed = crate::descriptor::host::PLACED_TEXTURE_SLOTS.load(Ordering::Relaxed),
                 objects = crate::descriptor::host::OBJECT_TEXTURE_SLOTS.load(Ordering::Relaxed)
             );
+            let samples = std::mem::take(&mut *self.frame_times.lock().unwrap_or_else(|e| e.into_inner()));
+            if let Some(stats) = frame_time_stats(&samples) {
+                tracing::info!(
+                    "frame times: p50 {:.1} ms, p90 {:.1}, p99 {:.1}, max {:.1}; over 2x median {} frames, over 100 ms {}, over 150 ms {}, over 250 ms {} (of {})",
+                    f64::from(stats.p50_us) / 1000.0,
+                    f64::from(stats.p90_us) / 1000.0,
+                    f64::from(stats.p99_us) / 1000.0,
+                    f64::from(stats.max_us) / 1000.0,
+                    stats.over_2x_median,
+                    stats.over_100_ms,
+                    stats.over_150_ms,
+                    stats.over_250_ms,
+                    stats.count
+                );
+            }
+            if !samples.is_empty() {
+                if let Some(tx) = frame_times_writer() {
+                    let _ = tx.try_send(samples);
+                }
+            }
             #[cfg(feature = "diagnostics")]
             {
                 let put = [0, 1, 2, 3].map(|i| crate::shadow::PUT[i].swap(0, Ordering::Relaxed) as f64 / frames);

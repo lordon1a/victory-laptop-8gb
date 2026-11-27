@@ -20,7 +20,9 @@ param(
     [switch]$Oyna,
     # Test sahnesi (27.11): koşudan önce saves bu yedekle değiştirilir (oyunun kendi kaydı sahneyi kaydırmasın).
     # 'acik' = Yiğit'in açık dünya kaydı, 'hapishane' = eski sahne, '' = dokunma.
-    [ValidateSet('', 'acik', 'hapishane')][string]$Sahne = ''
+    [ValidateSet('', 'acik', 'hapishane')][string]$Sahne = '',
+    # Süreç önceliği (27.11 Yiğit "biz mi lockladık": tüm koşular BelowNormal'dı). 27.11 11:20 KABUL Normal (aj: p99 216 -> 130, 269 -> 184 ms; >250 ms 16 -> 2). '' = guvenli_baslat varsayılanı (BelowNormal).
+    [ValidateSet('', 'BelowNormal', 'Normal', 'AboveNormal', 'High')][string]$Oncelik = 'Normal'
 )
 if ($Oyna) { $Tus = @(); $DunyaSn = 0 }
 $ErrorActionPreference = 'Stop'
@@ -120,6 +122,7 @@ $arg = @{
     MaxCommitGB    = 28
 }
 if ($DryRun) { $arg.DryRun = $true }
+if ($Oncelik) { $arg.Priority = $Oncelik }
 "Koşu $Tag | ek: " + (($Ek.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', ')
 # Erken teşhis (düz renk / donma / dünya gelmedi → DURDUR) koşuyla birlikte, ayrı süreçte.
 if (-not $DryRun) {

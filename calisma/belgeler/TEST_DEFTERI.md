@@ -152,3 +152,28 @@ Yatak odası: NO_WAIT 111.4 / 104.9 (ort. 108.2) vs taban 107.0 / 107.9 (ae2-tab
 | ah2-tab | cam | 132.4 | 101.1 | 21.2 | 402, 63.0 | 8264 |
 | ah2-gob | yatak | 149.0 | 122.5 | 24.8 | 308, 68.7 | 5973 |
 Kareler 6/6 temiz. GUARD_OUTSIDE guards kilit beklemesini düşürmedi (45-63 vs 55-63 ms), yatak odası kare 100.7/117.2 vs 92.2 → kazanç yok. BATCH_OPEN eklenince bekleme 69-72 ms'ye çıktı, kare 147-149 → kötü. Başkasında: GUARD_OUTSIDE fxceless #1315 (ölçüm bizim notlarda yok), avatarmanz PORT_GUARD (paylaşımlı kilit + atomik blok hakkı) 7900 XTX'te bekleme 29 → 2 ms. Neden: bizim bekleme VirtualProtect'in kilit içinde olmasından değil, kilidin kendisinin (GUARDS Mutex, tek) 7 thread arasında çekişmesinden → PORT_GUARD tipi paylaşımlı kilit gerekli.
+
+## 27.11 10:27-10:55 Jason ai1/ai2: taban / RETIRE_BATCH / +LOOSE_FOUND / PORT_GUARD (exe d382668) — HÜKÜM YOK (kirli koşular)
+| Koşu | oda | kare ms | hazırlık | guards bekleme (sayı, ms/kare) | bury main | diğer CPU medyan/maks (çekirdek) |
+|---|---|---|---|---|---|---|
+| ai1-rb | yatak | 103.9 | 82.5 | 341, 81.9 | 2.71 | 2.23 / 5.46 |
+| ai1-tab | yatak | 95.9 | 77.3 | 329, 63.6 | 3.29 | 0.59 / 2.76 |
+| ai1-rbl | yatak | 111.0 | 89.8 | 343, 72.9 | 4.54 | 1.48 / 4.03 |
+| ai1-pg | yatak | 114.4 | 90.8 | **16, 2.6** | 2.80 | 1.21 / 3.61 |
+| ai2-rb | yatak | 143.9 | 119.0 | 308, 75.5 | 3.36 | 2.09 / 4.67 |
+| ai2-tab | yatak | 116.5 | 92.8 | 356, 75.2 | 2.85 | 2.11 / 4.66 |
+| ai2-rbl | yatak | 98.4 | 79.2 | 359, 76.4 | 3.14 | 1.54 / 3.47 |
+| ai2-pg | cam | 117.3 | 91.3 | **22, 3.9** | 4.66 | 0.27 / 1.18 |
+Kareler temiz (sheet_ai). **PORT_GUARD mekanizması çalışıyor: guards kilit beklemesi 64-82 → 2.6-3.9 ms/kare (-%95), paylaşımlı kilit altında 489-558 fault açılıyor (1.2-1.5 ms bekleme)** — ama kare süresi bu gürültüde ayrışmıyor. Aynı ayarla iki koşu arası fark %20'ye kadar (tab 95.9 vs 116.5; rb 103.9 vs 143.9). **Neden: koşuların 6/8'i kirli** (diğer CPU medyanı > 1 çekirdek; en çok "T3 Code (Beta)" = alt ajan çıktıları/arayüz, ayrıca brave, Taskmgr) **+ oyun BelowNormal öncelikte** → arka plan yükü oyun thread'lerini kesiyor. RETIRE_BATCH bury süresini değiştirmedi (2.7-4.5 ms). Karar: üç bayrak da şimdilik kapalı; öncelik düzeltmesinden sonra ALT AJAN ÇALIŞMAZKEN yeniden ölçülecek. Yöntem kuralı: ölçüm zincirleri sırasında alt ajan yok.
+
+## 27.11 11:00-11:20 Jason aj1/aj2: süreç önceliği Normal / BelowNormal (eski) / AboveNormal (exe 0b74ba0, kare süresi dağılımı ilk kez) — NORMAL KABUL
+Temiz koşular (diğer CPU medyanı 0.26-0.51 çekirdek). Kareler 6/6 temiz.
+| Koşu | oda | kare ms (5 sn ort.) | p50 | p90 | p99 | max | >150 ms | >250 ms | kare |
+|---|---|---|---|---|---|---|---|---|---|
+| aj1-nor | cam | 100.1 | 98 | 114 | **130** | 599 | 15 | 4 | 562 |
+| aj1-bn | cam | 105.4 | 106 | 131 | 216 | 373 | 42 | 5 | 566 |
+| aj1-an | cam | 108.8 | 108 | 120 | 145 | 430 | 30 | 4 | 564 |
+| aj2-an | cam | 107.6 | 106 | 123 | 168 | 343 | 28 | 5 | 571 |
+| aj2-nor | yatak | 102.8 | 98 | 130 | **184** | 375 | 28 | 2 | 557 |
+| aj2-bn | yatak | 116.9 | 96 | 142 | 269 | 782 | 59 | **16** | 527 |
+Normal, BelowNormal'a göre iki odada da: ortalama -5 / -14 ms, **p99 216 → 130 ve 269 → 184 ms, >150 ms kareler 42 → 15 ve 59 → 28, >250 ms 16 → 2 (yatak)**. AboveNormal Normal'den iyi değil. **kosu.ps1 varsayılanı -Oncelik Normal** (Yiğit'in -Oyna oturumları da). Başkasında: ölçülmemiş (guvenli_baslat bizim betiğimiz). Neden: BelowNormal'da arka plan süreçleri (T3, Defender) oyun thread'lerini kesiyordu → takılmaların bir kısmı bizim başlatıcıdan. Not: p50 her yerde 96-108 ms; takılma tepeleri (max 343-782 ms) hâlâ var → RAM/paging adımı.

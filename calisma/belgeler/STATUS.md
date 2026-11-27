@@ -1,5 +1,26 @@
 # STATUS — victory-fork katkısı
 
+## ★ PLAN 27.11 10:55 (Yiğit: "planlara ekle, plana göre git, çok detaylı, hiçbir şeyi atlama")
+Hedef: Jason açık dünyada (1) ortalama kare 100 → <80 ms, (2) takılmaları (12 → 8 fps düşüşleri) azaltmak.
+Kanıtlı: kritik yol oyun thread'lerinde bizim çeviri (H29: %67 bizim kod; bind %21, gönderim %13, kilitler); kopya/doku/geri kopya kareyi belirlemiyor (H28). RAM (H34): private 17 GB, RAM'de yalnız 5.4 GB, ~11.6 GB sayfa dosyasında; diskten okuma patlamaları ↔ 100-150 ms pencereler. Tüm koşular BelowNormal öncelikteydi (H34).
+Adımlar (sırayla, her biri A/B + kare kontrolü + TEST_DEFTERI + repo):
+ 1. [YAPILDI, HÜKÜM YOK] ai zinciri: PORT_GUARD guards beklemesini -%95 kesti ama 6/8 koşu kirli (T3 + BelowNormal) → Normal öncelikte, ajan yokken tekrar (1b).
+  2. [YAPILDI 10:56] Yeni exe derle (0b74ba0: kare süresi dağılımı p50/p90/p99/max + takılma sayıları) → bundan sonraki her koşuda takılma ölçüsü. ozet.py'ye frame times satırını ekle.
+ 3. [YAPILDI 11:20, KABUL] Öncelik: Normal (p99 216 → 130 / 269 → 184 ms, >250 ms 16 → 2) → kosu.ps1 varsayılanı.
+ 1b. [SIRADA, Sol taraması bitince] PORT_GUARD / RETIRE_BATCH / LOOSE_FOUND'u Normal öncelikte, alt ajan çalışmazken, 2 tur × (tab, pg, pg+rb+lf) yeniden ölç.
+ 4. Arka plan RAM A/B (Marvisak #1820: 2.5 GB boşaltınca 4.6 → 7.5-8.6 fps): koşu öncesi hangi süreçlerin RAM tuttuğunu listele; Yiğit'e hangi programları kapatabileceğini sor (kapatmayı ben yapmam) → aynı ayarla önce/sonra.
+ 5. TEXTURE_NO_WAIT'i p99/takılma ölçüsüyle yeniden A/B.
+ 6. RAM düşürme: (a) WC 7.9 GiB'ın sahibini ölç (32/64 MiB WC grupları kimin: D3D12 upload/GPU_UPLOAD/WINDOWS_BAR?), (b) WINDOW_REUSE (fxceless #1362) A/B, (c) TEXTURE_BUDGET_MB 768 A/B, (d) LIST_POOL=0 maliyet/kazanç.
+ 7. Yeni profil (kazananlarla) → bind'da sıradaki (H31/H35): Marvisak #3379 HostList::keep COM tekilleştirme + CBV araması, fxceless #1443 bind geçici tahsisleri, Op-lite LIST_HOLD, fxceless #1429 toplu descriptor iadesi, ListViews'ı kare boyunca tutma, Marvisak #2821 kilitsiz hazır slot, avatarmanz #96 havuz parçalama.
+ 7b. Takılma: fxceless #1442 pipeline kitaplığı kilidini ada göre ayırma (5060 Laptop 7.6 sn → 26 µs bekleme).
+ 8. Gönderim oyun thread'inde (%13): ASYNC_SUBMIT bizde etkin mi doğrula, değilse A/B.
+ 9. Ses (apu opus %4): Marvisak #2423 opus PCM tampon yeniden kullanımı, #3383 XMA yalnız etkin sesler.
+ 10. Neptune (kaynak zm0kiemedia/Neptune_VI + clankenjoyer/neptune-fps, H35) 28.11 17:00 sürümü çıkınca: kaynak Neon güvenlik incelemesi → VRAM düşüşü ve fps parçaları tek tek.
+ Sürekli: Sol geniş tarama raporu gelince BULGULAR'a; her adımdan sonra kaydet.ps1 -Gonder + acik_guncelle.ps1; Yiğit oynarsa ilerleme yedeği + sahne kaydı geri.
+Tahmin (kanıtlanmadı): 1. adım %5-10; öncelik 0-10 (rekabet anlarında); arka plan RAM takılmada büyük; bind işleri %10-20.
+Park: XCL (gerek yok), WINDOW_KB 4096 (ret), GUARD_OUTSIDE/BATCH_OPEN (ret), TEXTURE_NO_WAIT (ortalamada ret, takılmada yeniden = adım 5).
+
+
 ## TEST LİSTESİ — UNUTMA (Yiğit 26.11 12:02 "bunları unutma"; her adım bitince güncelle)
 ROLLER (Yiğit 26.11 13:40): Sol = araştırma/tarama/güvenlik incelemesi, Neon = kod/port. Claude = plan, diff, derleme, A/B, overlay, kayıt. (Sol'un CLAMP_WAITS portu başlamıştı, o biter.)
 Gerçek: darboğaz EKRAN KARTI (%91-100). Yalnız kart işini azaltan şey fps'e yansır. Şu an hapishane ~150 ms (6.7 fps), RT paketi tabanda.
