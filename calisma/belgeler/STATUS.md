@@ -68,6 +68,7 @@ G4. VIDEO_BUDGET_MB (#1184: VRAM taşınca 982f 160 → 12 ms) — G0 sistem RAM
 1e. odycal VRAM_WINDOW=1 (~500-700 satır): pencereler VRAM'e; kart sistem RAM'inden okumayı bırakır (TAHMİN). #413'ün tersine taşmada kendini kapatıyor.
 1f. Teşhis: scarlett CARD_METER_KINDS/PIPELINES — 150 ms kart süresinin türlere dağılımı (madde 4'ün alternatifi).
 1c. Ölçüm serisi öncesi `victory shaders` + `warm --used` tazele (BVH_MISS/RT anahtarları değişti; Discord bdoe "pre warm" tarifi). Fps'i değil takılma/dünyaya giriş süresini düzeltir (03:50 warm kanıtı).
+27.11 08:35 TEST BAŞLADI (Yiğit 'başla', FG kapalı, Jason açık dünya): ABBA eca-taban / eca-echo / ecb-echo / ecb-taban (VICTORY_LAND_ECHO 0 vs 1), vw-avatar diag (FG yok, taban RS 0.5 aynı), -Sahne acik -DunyaSn 60. Yiğit ilerlemesi yedek: yedek_saves_20261127_0833_yigit_oyun. Sıralama: SIRALAMA.md. Log: repo_durum/zincir_echo.log.
 2. SEND_BAR=1 (kodsuz, send.rs:137).
 3. ~~DROP_MIPS=2~~ (1 reddedildi).
 4. GPU_TIMING=1 teşhis: her karedeki 43-48 ms'lik submission'ın içinde ne var (host.rs:1790); Neptune 6cc42d53 VICTORY_GPU_TIME (+409) alternatif.

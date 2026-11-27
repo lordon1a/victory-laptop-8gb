@@ -100,3 +100,25 @@ Bu yüzden CPU/RAM tarafında kazandıran ayarlar başkasında fps artırsa da b
 
 fxceless #1171 indirect gruplama (Sol portluyor; 3090 Ti: kart 56 → 43 ms) → #1227 CARD_SYNC_BATCH (kartta 29 → 6 ms) → SEND_BAR=1 → GPU_TIMING teşhisi → RENDER_SCALE 480/540/720p.
 Ölçüm serisinden önce `shaders` + `warm --used` tazelenir.
+
+## 27.11 08:39-08:51 Açık dünya (Jason yatak odası) ac1/ac2: LAND_ECHO=1 / taban / WINDOW_KB 4096 (dünya+40 sn, dünya+10 sn sonrası medyan)
+| Koşu | kare ms | hazırlık | kopya ms / MB | doku ms | geri kopya | çizim |
+|---|---|---|---|---|---|---|
+| ac1-eco | 87.8 | 69.4 | 23.8 / 75.0 | 5.5 | 15.8 | 6068 |
+| ac1-tab | 95.8 | 78.7 | 25.1 / 70.3 | 5.5 | 14.4 | 5986 |
+| ac1-w4k | 446.9 | 158.5 | 38.6 / 77.1 | 88.2 | 15.5 | 5913 |
+| ac2-eco | 152.4 | 122.1 | 34.5 / 87.2 | 36.6 | 15.6 | 8242 |
+| ac2-tab | 172.8 | 140.7 | 38.0 / 84.3 | 54.9 | 15.9 | 10059 |
+| ac2-w4k | 134.1 | 85.5 | 27.0 / 71.7 | 14.3 | 14.7 | 5910 |
+Kareler: 5/5 aynı yer (yatak odası, pencere), görüntü temiz (ac2-tab kare kaydı yok). ECHO=1 kare başına ~3 MB'ı karta tekrar yollamıyor (2-2.6 MB oyunun da yazdığı → gidiyor). **Hüküm yok:** dünya sonrası ilk 40 sn doku akışı (doku 5 → 88 ms) ve çizim 5900-10000 oynuyor; temiz çift (ac1, doku 5.5) eco 87.8 vs tab 95.8. Başkasında: ECHO hiç ölçülmemiş; WINDOW_KB 3070'te 157 → 147 (MKmajster). Neden: ölçüm penceresi ısınmaya denk geldi → ad1/ad2 zinciri dünya+100 sn, ilk 40 sn atılır.
+
+## 27.11 08:52-09:11 Jason ad1/ad2 (dünya+100 sn, ilk 40 sn atıldı) — LAND_ECHO=1 KABUL
+| Koşu | kare ms | hazırlık | kopya ms / MB | doku ms | geri kopya | çizim |
+|---|---|---|---|---|---|---|
+| ad1-eco | 93.4 | 76.2 | 24.0 / 67.8 | 10.9 | 15.2 | 5894 |
+| ad1-tab | 129.5 | 96.6 | 31.3 / 84.3 | 26.9 | 14.1 | 7713 |
+| ad1-w4k | 104.2 | 79.0 | 24.2 / 68.2 | 21.9 | 14.7 | 6050 |
+| ad2-eco | 133.7 | 113.6 | 27.7 / 66.4 | 55.0 | 14.7 | 6074 |
+| ad2-tab | 148.0 | 121.9 | 29.2 / 72.8 | 54.7 | 13.6 | 8362 |
+| ad2-w4k | 122.8 | 101.2 | 28.5 / 66.7 | 31.4 | 14.2 | 5996 |
+Kareler 6/6 aynı yer, temiz. **LAND_ECHO=1: 4/4 çift tabandan hızlı** (ac1 87.8/95.8, ac2 152/173, ad1 93/130, ad2 134/148), kopya MB 66-68 vs 72-84, ~3 MB/kare tekrar gönderim kesiliyor. Uyarı: taban koşularında çizim medyanı daha yüksek (7713/8362, 6500 altı kare yok) → kazancın bir kısmı sahne gürültüsü olabilir. Kod tarafı: avatarmanz'ın varsayılanı 1, bizdeki 0 -Safe kalıntısıydı → düşük risk. **kosu.ps1 tabanına LAND_ECHO=1 alındı.** Başkasında: ölçülmemiş. WINDOW_KB 4096: eski tabana göre 3/4 iyi, eco'ya göre fark yok → yeni taban üstünde ae1/ae2 ile ölçülüyor. Gözlem: geri kopya 14-15 ms ama yalnız 3.5 MB → bayt değil bekleme maliyeti (Neon'a soruldu).
