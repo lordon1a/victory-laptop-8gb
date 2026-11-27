@@ -132,3 +132,12 @@ Kareler 6/6 aynı yer, temiz. **LAND_ECHO=1: 4/4 çift tabandan hızlı** (ac1 8
 | ae2-tab (yeni taban) | yatak | 107.9 | 88.8 | 27.0 / 66.6 | 23.3 | 6014 |
 | ae2-w4k | yatak | 113.1 | 85.7 | 27.1 / 67.4 | 26.1 | 5988 |
 **LAND_ECHO yeniden değerlendirme (oda içinde):** yatak: eco 87.8 / 93.4 / 133.7 vs eski taban 95.8 (tek); cam: eco 152 / 102 vs eski taban 173 / 130 / 148. Yön aynı (eco ≤ taban) ama önceki "4/4" iddiası oda farkıyla karışıktı → **kanıt zayıf, ayar kalıyor** (avatarmanz varsayılanı, hiçbir odada kötü değil, ~3 MB/kare kesiyor). **WINDOW_KB 4096 RET:** aynı odada (yatak, yeni taban) 107.9 vs 112.8 / 113.1, kopya MB aynı (66-68); MKmajster'in 3070'teki 157 → 147 kazancı bizde yok (bizim kopya zaten 67 MB, onlarınki 154 MB idi). +0.5 GB RAM bedeli boşa. Görüntü: ae2-tab yatak odasında pencere altı duvarda soyuk boya izi var, ae2-w4k ve diğer yatak karelerinde yok → doku/decal akış zamanlaması (doğrulanmadı). Ayrıca gözlem: aynı ayarla ad2 > ad1 (≈ +30-40 ms), zaman/ısı etkisi olabilir.
+
+## 27.11 09:25-09:37 Jason af1/af2: TEXTURE_NO_WAIT=1 vs taban (LAND_ECHO=1) — RET (kare kazancı yok)
+| Koşu | oda | kare ms | hazırlık | kopya ms / MB | doku ms | remap bekleme | çizim |
+|---|---|---|---|---|---|---|---|
+| af1-nw | yatak | 111.4 | 81.0 | 24.9 / 68.3 | 6.2 | 0.0 | 5911 |
+| af1-tab | cam | 117.6 | 93.8 | 34.5 / 83.8 | 17.4 | 39.6 | 8217 |
+| af2-nw | yatak | 104.9 | 69.6 | 23.2 / 67.3 | 5.3 | 0.0 | 5836 |
+| af2-tab | yatak | 107.0 | 82.4 | 25.8 / 67.2 | 19.3 | 60.0 | 5914 |
+Yatak odası: NO_WAIT 111.4 / 104.9 (ort. 108.2) vs taban 107.0 / 107.9 (ae2-tab) (ort. 107.5) → **kare süresi değişmiyor**, ama doku 19 → 5-6 ms ve hazırlık ~12 ms düşüyor. Görüntü: af2-tab'da pencere altında su lekesi/kir var, iki NO_WAIT koşusunda da yok; ama taban koşularında da leke bazen yok (ad1-eco, ad2-w4k temiz duvar) → akış zamanlaması, NO_WAIT'e bağlanamadı (doğrulanmadı). **Hüküm: RET** (kazanç yok + olası görüntü riski). **★ Asıl öğrenilen:** hazırlık 12 ms düşünce kare düşmüyor → kareyi bizim hazırlık değil başka bir şey sınırlıyor (panel: SUBMIT BUSY ~86 ms / 100 ms kare, GPU boşta 45 ms). Darboğaz analizi Neon'a verildi. Başkasında: NO_WAIT edsuuu'da açık (hapishane), ayrı ölçüm yok.
