@@ -15,10 +15,13 @@ $cekirdek = [Environment]::ProcessorCount
 $once = @{}
 $son = (Get-Date).AddMinutes($Dakika)
 $goruldu = $false
+$vpid = $null
 $t0 = Get-Date
 while ((Get-Date) -lt $son) {
     $hepsi = Get-Process
-    $oyunVar = [bool]($hepsi | Where-Object ProcessName -match $oyun)
+    # 27.11: ilk görülen victory PID'ine bağlı; o kapanınca biter (eskiden süre dolana dek sonraki koşuya taşıyordu).
+    if (-not $vpid) { $vpid = ($hepsi | Where-Object ProcessName -eq 'victory' | Sort-Object StartTime -Descending | Select-Object -First 1).Id }
+    $oyunVar = [bool]($vpid -and ($hepsi | Where-Object Id -eq $vpid))
     if ($oyunVar) { $goruldu = $true } elseif ($goruldu) { break }
     $pid0 = 0; [void][Kz.W]::GetWindowThreadProcessId([Kz.W]::GetForegroundWindow(), [ref]$pid0)
     $on = ($hepsi | Where-Object Id -eq $pid0).ProcessName

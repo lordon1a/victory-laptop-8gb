@@ -11,8 +11,11 @@ $oyun = '^(victory|game_scarlett_master)$'
 # Sayaç adları Windows diline göre değişir; CIM sınıf adları değişmez.
 $son = (Get-Date).AddMinutes($Dakika)
 $goruldu = $false
+$vpid = $null
 while ((Get-Date) -lt $son) {
-    $oyunVar = [bool](Get-Process | Where-Object ProcessName -match $oyun)
+    # 27.11: ilk görülen victory PID'ine bağlı; o kapanınca biter (eskiden süre dolana dek sonraki koşuya taşıyordu).
+    if (-not $vpid) { $vpid = (Get-Process victory -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1).Id }
+    $oyunVar = [bool]($vpid -and (Get-Process -Id $vpid -ErrorAction SilentlyContinue))
     if ($oyunVar) { $goruldu = $true } elseif ($goruldu) { break }
     $g = (& nvidia-smi --query-gpu=temperature.gpu,clocks.gr,power.draw,clocks_throttle_reasons.active --format=csv,noheader,nounits 2>$null) -split ',\s*'
     $m = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory

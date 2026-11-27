@@ -20,6 +20,8 @@ while (-not (Get-Process victory -ErrorAction SilentlyContinue)) {
     if ((Get-Date) -gt $son) { Write-Output 'victory.exe başlamadı, çıkılıyor.'; exit 1 }
     Start-Sleep -Seconds 2
 }
+# 27.11: yalnız bu koşunun victory'sini izle (eskiden ad ile bakıyordu, sonraki koşuya taşıp eski klasöre kare yazıyordu).
+$vpid = (Get-Process victory -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1).Id
 $kok = Join-Path $env:LOCALAPPDATA 'Victory\kosular'
 $kosu = (Get-ChildItem $kok -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 $kareDir = Join-Path $kosu 'kareler'
@@ -66,7 +68,7 @@ public class EtPencere {
 }
 "@
 function Pencere-Kurtar {
-    $p = Get-Process victory -ErrorAction SilentlyContinue | Select-Object -First 1
+    $p = Get-Process -Id $vpid -ErrorAction SilentlyContinue
     if (-not $p -or $p.MainWindowHandle -eq [IntPtr]::Zero) { return $false }
     $h = $p.MainWindowHandle
     $r = New-Object EtPencere+RECT
@@ -83,7 +85,7 @@ function Pencere-Kurtar {
 
 $baslangic = Get-Date
 $kotu = 0; $onceki = $null; $dunyaGordu = $false; $alarm = $false; $logBoy = 0; $logSabit = 0
-while (Get-Process victory -ErrorAction SilentlyContinue) {
+while (Get-Process -Id $vpid -ErrorAction SilentlyContinue) {
     $sn = [int]((Get-Date) - $baslangic).TotalSeconds
     $dosya = Join-Path $kareDir ('kare_{0:D4}s.png' -f $sn)
 

@@ -177,3 +177,28 @@ Temiz koşular (diğer CPU medyanı 0.26-0.51 çekirdek). Kareler 6/6 temiz.
 | aj2-nor | yatak | 102.8 | 98 | 130 | **184** | 375 | 28 | 2 | 557 |
 | aj2-bn | yatak | 116.9 | 96 | 142 | 269 | 782 | 59 | **16** | 527 |
 Normal, BelowNormal'a göre iki odada da: ortalama -5 / -14 ms, **p99 216 → 130 ve 269 → 184 ms, >150 ms kareler 42 → 15 ve 59 → 28, >250 ms 16 → 2 (yatak)**. AboveNormal Normal'den iyi değil. **kosu.ps1 varsayılanı -Oncelik Normal** (Yiğit'in -Oyna oturumları da). Başkasında: ölçülmemiş (guvenli_baslat bizim betiğimiz). Neden: BelowNormal'da arka plan süreçleri (T3, Defender) oyun thread'lerini kesiyordu → takılmaların bir kısmı bizim başlatıcıdan. Not: p50 her yerde 96-108 ms; takılma tepeleri (max 343-782 ms) hâlâ var → RAM/paging adımı.
+
+## 27.11 11:22-11:41 Jason ak1/ak2: PORT_GUARD / taban / hep (PG+RETIRE_BATCH+LOOSE_FOUND), Normal öncelik, alt ajan yok (exe 0b74ba0) — HEP RED, PORT_GUARD HÜKÜM YOK
+| Koşu | oda | kare ms | p50 | p90 | p99 | max | >150 | >250 | kare | guards ms/kare | diğer CPU medyan/p90 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| ak1-pg | cam | **94.8** | 93 | 106 | **119** | 381 | **9** | 1 | 650 | 7.2 | 0.64 / 1.54 |
+| ak1-tab | yatak | 102.2 | 90 | 109 | 236 | 466 | 51 | 18 | 557 | 72.3 | 0.30 / 0.57 |
+| ak1-hep | cam | 114.3 | 108 | 189 | 491 | 937 | 93 | 28 | 440 | 28.0 | 0.25 / 0.55 |
+| ak2-pg | cam | 156.6 | 124 | 225 | 350 | 689 | 106 | 22 | 428 | 2.8 | 0.90 / 1.76 (kirli: süreç listelemem + taşan izleyiciler) |
+| ak2-tab | yatak | 105.8 | 108 | 144 | 205 | 332 | 38 | 5 | 512 | 0.0 | 1.24 / 2.08 (kirli) |
+| ak2-hep | yatak | 124.3 | 109 | 143 | 259 | 326 | 71 | 14 | 540 | 8.8 | 1.33 / 2.73 (kirli) |
+Kareler 6/6 temiz (sheet_ak). Kıyas cam odası (aj1-nor 100.1, p99 130, >150 15): **ak1-pg şimdiye kadarki en iyi cam koşusu (94.8, p99 119, >150 9)** ama ak2-pg aynı odada 156.6 (kirli). **hep iki odada da kötü** (cam 114 / p99 491, yatak 124 vs taban 102-106) → RETIRE_BATCH + LOOSE_FOUND RED (ai'de de kazanç yoktu), kapalı kalır. PORT_GUARD: 1 iyi + 2 kötü (ikisi kirli) → arka plan temizliğinden sonra al zincirinde 3× tekrar.
+Ek bulgu: erken_teshis/kullanim_izle/isi_izle bir sonraki koşuya taşıyordu (ad ile ya da süreyle bekliyordu; ak2-pg kullanım dosyasında iki izleyicinin satırları, 162 satır). Düzeltildi: üçü de ilk gördüğü victory PID'ine bağlı, o kapanınca çıkıyor. Başkasında: yok (bizim betik).
+
+## 27.11 11:42-12:01 Jason al1-3: taban / PORT_GUARD ×3, arka plan temiz (webview2 88 → 6), izleyiciler PID'e bağlı (exe 0b74ba0) — PORT_GUARD KAZANÇ YOK (kapalı), TEMİZLİK FARK YOK
+| Koşu | oda | kare ms | p50 | p90 | p99 | max | >150 | >250 | kare | diğer CPU medyan/p90 | boş RAM medyan GB |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| al1-tab | yatak | 105.4 | 91 | 140 | 262 | 470 | 52 | 12 | 618 | 0.46 / 1.79 | 0.60 |
+| al1-pg | yatak | 105.2 | 98 | 148 | 289 | 752 | 60 | 10 | 588 | 0.22 / 0.43 | 1.13 |
+| al2-pg | cam | 108.0 | 108 | 133 | 171 | 684 | 29 | 3 | 559 | 0.48 / 0.77 | 0.79 |
+| al2-tab | yatak | **93.5** | 96 | 111 | 171 | 281 | 20 | 4 | 638 | 0.21 / 0.58 | 0.57 |
+| al3-tab | cam | 120.4 | 111 | 161 | 302 | 491 | 61 | 10 | 481 | 0.78 / 2.01 | 1.22 |
+| al3-pg | cam | 149.2 | 128 | 226 | 325 | 471 | 126 | 25 | 422 | 1.12 / 2.02 (kirli) | 0.54 |
+Kareler 6/6 temiz (sheet_al). **PORT_GUARD toplam (ai+ak+al, 7 koşu):** cam 94.8 / 108.0 / 117.3 / 149.2* / 156.6* vs taban cam 100.1 / 120.4; yatak 105.2 / 114.4* vs taban 93.5-105.8. Mekanizma çalışıyor (guards beklemesi -%95) ama kare süresinde tutarlı kazanç yok → **kapalı kalır** (testlerde bayat VIEWS riski de var). Sebep: o bekleme kritik yolda değil; boşalan süre başka beklemeye kayıyor (H28'deki gibi).
+**Arka plan temizliği:** taban yatak öncesi 102.2 / 105.8 (p99 236 / 205), sonrası 105.4 / 93.5 (p99 262 / 171) → ayırt edilemez. Boş RAM koşu sırasında yine 0.5-1.2 GB: RAM'i oyunun kendisi dolduruyor, arka plan değil.
+**Asıl bulgu (isi_*.csv, 12 koşu):** koşu boyunca diskten ortalama **22.000-39.000 sayfa/sn** (~90-150 MB/sn) geri okunuyor, saniyelerin %57-90'ında >2000/sn. Aynı ayarla koşular arası fark (93.5 ↔ 120.4) bununla ve odayla açıklanıyor → bir sonraki adım RAM (plan 6). Başkasında: Marvisak #1820 (2.5 GB boşaltınca 4.6 → 7.5-8.6 fps), 16 GB'ta herkes aynı duvarda.
