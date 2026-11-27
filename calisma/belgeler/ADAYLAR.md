@@ -139,6 +139,10 @@ Watcher yeni satırları AYNI sütunlarla ekler (durum = bulundu, güvenlik = Ya
 | ZRen runtime ZIP / i95 v0.3.4 | ZRen277353, DesignWithTommy | — | — | **KULLANMA** (hazır ikili) |
 | **Katman tekrar okuması kesme (GPU-yazılı aralığı refresh'te okuma/yükleme)** | fxceless #1169 (oyun %0.1-0.3 okuyor), #1178 v2 lazy_read_bypass, backreads.rs c36971b2 | 4090: geri kopyanın oyunca okunan payı %0.1-0.3 | yok | **SIRA 1 (asıl iş)**: önce sayaç |
 | **LAND_ECHO=1 (+ LAND_SKIP=1)** — tabanda 0 kalmış echo kesici (H25) | avatarmanz kodu (varsayılan 1), bizde -Safe kalıntısı 0 | ölçülmedi | ayar var, kod yok | **SIRA 1a** (kodsuz, açık dünya A/B; katman tekrar okuma kesmenin hazır yarısı) |
+| RT atlama genişletmesi (Skinning/TraceRays_BVH/RaytraceVBuffer/HairVB) | edsuuu/VI-BR-PORT ab4571df, 1556de82, 24f8d2ed, f1e5e454 (H26) | 4060 Ti açılış 6.8 → 10.9 (Resolve dahil; bizde Resolve zaten atlanıyor) | Resolve var, diğerleri yok | SIRA 3 (make.rs left_out'a birkaç satır; ActivateRays HARİÇ) |
+| Series S çok-düzlemli present'i beklemeden gönder | edsuuu 511f629a (H26) | commit notu ~20 ms/kare bekleme | late_free_present var, bu yolda mı? doğrulanmadı | SIRA 2b (önce kodu oku: bizde senkron mu) |
+| CARD_COMPARE_JOIN | edsuuu 2f59f1df (H26) | ölçülmemiş | yok | SIRA 4 |
+| ASYNC_SUBMIT | edsuuu (fxceless f85101b6) (H26) | 4060 Ti hapishane 22.9 → 24.3, min 14.4 → 18.6 | yok | SIRA 5 (16 GB'ta thread çekişmesi riski) |
 | WINDOW_KB 256 → 4096 | MKmajster (fxceless #1083) | 3070 8 GB + 16 GB: 153.7 → 88.6 MB/kare, 157 → 147 ms, +0.5 GB | ayar var | **SIRA 2** (ucuz A/B, açık dünya) |
 | cool_fox büyük tampon VRAM rezervi | cool_fox #40 / 42ac5626b | 4060 Laptop 8 GB: 348 → 88 ms | yok | önce bizde büyük tampon RAM'e düşüyor mu sayaç |
 | XCL #2844 CUSTOM L0 pencere | xcl-dev/xcl | 5070 Ti dünya 0.62 → 3.03 fps; GPU 1427 → 165 ms | yok | incele (yeni proje, güvenlik) |
