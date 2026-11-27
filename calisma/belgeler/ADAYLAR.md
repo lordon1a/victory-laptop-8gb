@@ -131,3 +131,9 @@ Watcher yeni satırları AYNI sütunlarla ekler (durum = bulundu, güvenlik = Ya
 | Write-watch rezervasyon sorgusu | fxceless #1365 | 5060 Laptop: p95 206 → 193 | yok | sonra |
 | mimalloc | Peppa #17, trustno1 #11 | 5080 −7 ms, +0.8 GB RAM | yok | 16 GB'ta riskli, park |
 | i95 launcher | DesignWithTommy | — | — | **KULLANMA** (hazır ZIP, ağ, tünel) |
+| **COPY_BACK_BESIDE** (Sol 27.11 05:30 en güçlü) | Marvisak #3069 | RTX 4070S hapishane: geri kopya 60.6 → 47.5 ms, kare 291.6 → 272.5, koruma çağrısı 5366 → 1556/kare | yok | **SIRA 1** — bizim 16 ms copy-back'i hedefliyor; Neon port |
+| TABLED_ALL | fxceless #1414 | 3090 Ti: 80-91 → 56-62 ms; **5060 Laptop 8 GB: descriptor 30.5 → 5.3 ama kare 166 → 195, geri kopya 64.7 → 81.4** | yok | 8 GB'ta olumsuz, dikkat |
+| MERGE_SUBMISSIONS | Peppa #20 | 5080: −1.86 ms/kare, gönderim 41 → 8.3 (10/11) | yok | sonra |
+| Op-lite bc264a41 SOFT_VIEWS=copies paketi | Op-lite | 4080S: 59-66 → 46-49 ms, re-upload 6.4 GB → <15 MB (paket) | yok | arşivde var, tek tek |
+| fxceless #1407 geri kopya hizasız taşma düzeltmesi | fxceless #1407 | sentetik 48 MiB | yok (Shadow::differing riskli çıkarma bizde de) | küçük doğruluk düzeltmesi, port adayı |
+| ZRen runtime ZIP / i95 v0.3.4 | ZRen277353, DesignWithTommy | — | — | **KULLANMA** (hazır ikili) |
