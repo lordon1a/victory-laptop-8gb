@@ -141,3 +141,14 @@ Kareler 6/6 aynı yer, temiz. **LAND_ECHO=1: 4/4 çift tabandan hızlı** (ac1 8
 | af2-nw | yatak | 104.9 | 69.6 | 23.2 / 67.3 | 5.3 | 0.0 | 5836 |
 | af2-tab | yatak | 107.0 | 82.4 | 25.8 / 67.2 | 19.3 | 60.0 | 5914 |
 Yatak odası: NO_WAIT 111.4 / 104.9 (ort. 108.2) vs taban 107.0 / 107.9 (ae2-tab) (ort. 107.5) → **kare süresi değişmiyor**, ama doku 19 → 5-6 ms ve hazırlık ~12 ms düşüyor. Görüntü: af2-tab'da pencere altında su lekesi/kir var, iki NO_WAIT koşusunda da yok; ama taban koşularında da leke bazen yok (ad1-eco, ad2-w4k temiz duvar) → akış zamanlaması, NO_WAIT'e bağlanamadı (doğrulanmadı). **Hüküm: RET** (kazanç yok + olası görüntü riski). **★ Asıl öğrenilen:** hazırlık 12 ms düşünce kare düşmüyor → kareyi bizim hazırlık değil başka bir şey sınırlıyor (panel: SUBMIT BUSY ~86 ms / 100 ms kare, GPU boşta 45 ms). Darboğaz analizi Neon'a verildi. Başkasında: NO_WAIT edsuuu'da açık (hapishane), ayrı ölçüm yok.
+
+## 27.11 09:50-10:10 Jason ah1/ah2: GUARD_OUTSIDE=1 / taban / GUARD_OUTSIDE+BATCH_OPEN — RET (ikisi de)
+| Koşu | oda | kare ms | hazırlık | doku | guards kilit bekleme (sayı, ms/kare) | çizim |
+|---|---|---|---|---|---|---|
+| ah1-go | yatak | 100.7 | 78.2 | 6.3 | 324, 63.1 | 6003 |
+| ah1-tab | yatak | 92.2 | 74.2 | 6.8 | 314, 55.0 | 5936 |
+| ah1-gob | yatak | 146.9 | 119.3 | 52.5 | 298, 72.0 | 5942 |
+| ah2-go | yatak | 117.2 | 96.1 | 31.2 | 304, 45.3 | 6062 |
+| ah2-tab | cam | 132.4 | 101.1 | 21.2 | 402, 63.0 | 8264 |
+| ah2-gob | yatak | 149.0 | 122.5 | 24.8 | 308, 68.7 | 5973 |
+Kareler 6/6 temiz. GUARD_OUTSIDE guards kilit beklemesini düşürmedi (45-63 vs 55-63 ms), yatak odası kare 100.7/117.2 vs 92.2 → kazanç yok. BATCH_OPEN eklenince bekleme 69-72 ms'ye çıktı, kare 147-149 → kötü. Başkasında: GUARD_OUTSIDE fxceless #1315 (ölçüm bizim notlarda yok), avatarmanz PORT_GUARD (paylaşımlı kilit + atomik blok hakkı) 7900 XTX'te bekleme 29 → 2 ms. Neden: bizim bekleme VirtualProtect'in kilit içinde olmasından değil, kilidin kendisinin (GUARDS Mutex, tek) 7 thread arasında çekişmesinden → PORT_GUARD tipi paylaşımlı kilit gerekli.

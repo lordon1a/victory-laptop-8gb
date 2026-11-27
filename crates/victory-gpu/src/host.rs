@@ -535,6 +535,79 @@ pub(crate) fn retire<T: 'static>(object: T) {
         .push_back((started, Retired::Any(Box::new(object))));
 }
 
+/// Whether [`retire_resource`] batches retired resources per thread before
+/// pushing them to [`RETIRED`] (`VICTORY_RETIRE_BATCH=1`; off by default).
+fn retire_batch() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| crate::switch::on("VICTORY_RETIRE_BATCH"))
+}
+
+/// Number of retired objects buffered per thread before flushing to
+/// [`RETIRED`] when `VICTORY_RETIRE_BATCH=1`.
+const RETIRE_BATCH_LIMIT: usize = 64;
+
+/// Per-thread staging buffer for retired objects. Flushes to [`RETIRED`]
+/// when it reaches [`RETIRE_BATCH_LIMIT`], on [`flush_retired`], or when
+/// the owning thread exits.
+struct RetiredBatch {
+    items: std::cell::RefCell<Vec<(u64, Retired)>>,
+}
+
+impl RetiredBatch {
+    const fn new() -> Self {
+        Self {
+            items: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+
+    fn push(&self, started: u64, item: Retired) {
+        let mut items = self.items.borrow_mut();
+        items.push((started, item));
+        if items.len() >= RETIRE_BATCH_LIMIT {
+            RETIRED.lock().unwrap_or_else(|e| e.into_inner()).extend(items.drain(..));
+        }
+    }
+
+    fn flush(&self) {
+        let mut items = self.items.borrow_mut();
+        if items.is_empty() {
+            return;
+        }
+        RETIRED.lock().unwrap_or_else(|e| e.into_inner()).extend(items.drain(..));
+    }
+}
+
+impl Drop for RetiredBatch {
+    fn drop(&mut self) {
+        let items = self.items.get_mut();
+        if !items.is_empty() {
+            RETIRED.lock().unwrap_or_else(|e| e.into_inner()).extend(items.drain(..));
+        }
+    }
+}
+
+thread_local! {
+    static RETIRE_LOCAL: RetiredBatch = const { RetiredBatch::new() };
+}
+
+fn push_retired_local(started: u64, item: Retired) {
+    let mut item = Some(item);
+    let _ = RETIRE_LOCAL.try_with(|batch| {
+        if let Some(item) = item.take() {
+            batch.push(started, item);
+        }
+    });
+    if let Some(item) = item {
+        RETIRED.lock().unwrap_or_else(|e| e.into_inner()).push_back((started, item));
+    }
+}
+
+/// Flushes any retired objects buffered on the current thread into
+/// [`RETIRED`], preserving each entry's original submission fence.
+pub(crate) fn flush_retired() {
+    let _ = RETIRE_LOCAL.try_with(RetiredBatch::flush);
+}
+
 /// [`retire`] for a resource.
 pub(crate) fn retire_resource(object: ID3D12Resource) {
     let queued = crate::queue::queued();
@@ -549,7 +622,11 @@ pub(crate) fn retire_resource(object: ID3D12Resource) {
         return;
     }
     RETIREMENTS[1].fetch_add(1, Ordering::Relaxed);
-    RETIRED.lock().unwrap_or_else(|e| e.into_inner()).push_back((started, Retired::Resource(object)));
+    if retire_batch() {
+        push_retired_local(started, Retired::Resource(object));
+    } else {
+        RETIRED.lock().unwrap_or_else(|e| e.into_inner()).push_back((started, Retired::Resource(object)));
+    }
 }
 
 /// How many submissions later than it could (the last one that may use it
@@ -567,6 +644,9 @@ fn bury_lag() -> u64 {
 /// numbers come in order, but for threads that overtake each other: one of
 /// those is dropped a little later than it could be.
 fn bury(finished: u64) {
+    if retire_batch() {
+        flush_retired();
+    }
     let began = std::time::Instant::now();
     let finished = finished.saturating_sub(bury_lag());
     let done: Vec<Retired> = {
@@ -6730,6 +6810,9 @@ impl HostList {
                 "a host command list did not close ({e}): a command recorded into it was invalid"
             ));
         }
+        if retire_batch() {
+            flush_retired();
+        }
     }
 
     /// `work` finds, on a thread of ours, refreshes that belong at this
@@ -11459,6 +11542,8 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         assert_eq!(reaper.pending_len(), 0);
     }
 
+    static RETIRED_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn bury_respects_finished_fence_and_lag() {
         use std::sync::Arc;
@@ -11471,6 +11556,7 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
             }
         }
 
+        let _guard = RETIRED_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dropped = Arc::new(AtomicUsize::new(0));
         let lag = super::bury_lag();
         // Start well above any prior test values.
@@ -11490,6 +11576,76 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         // At `base + 5 + lag`, the second item is eligible too.
         super::bury(base + 5 + lag);
         assert_eq!(dropped.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn retire_batch_flushes_below_limit_and_preserves_fence() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Count(Arc<AtomicUsize>);
+        impl Drop for Count {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let _guard = RETIRED_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        super::flush_retired();
+        super::RETIRED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let lag = super::bury_lag();
+        let base = 2_000_000u64;
+
+        // Fewer than RETIRE_BATCH_LIMIT items stay in the per-thread buffer.
+        super::push_retired_local(base, super::Retired::Any(Box::new(Count(Arc::clone(&dropped)))));
+        super::push_retired_local(base + 3, super::Retired::Any(Box::new(Count(Arc::clone(&dropped)))));
+        super::push_retired_local(base + 7, super::Retired::Any(Box::new(Count(Arc::clone(&dropped)))));
+        assert!(super::RETIRED.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+
+        // Explicit flush hands them to RETIRED with their original fence intact.
+        super::flush_retired();
+        assert_eq!(super::RETIRED.lock().unwrap_or_else(|e| e.into_inner()).len(), 3);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+
+        // bury drops each only once its preserved fence + lag has passed.
+        super::bury(base + lag - 1);
+        assert_eq!(dropped.load(Ordering::Relaxed), 0);
+        super::bury(base + lag);
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        super::bury(base + 3 + lag);
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
+        super::bury(base + 7 + lag);
+        assert_eq!(dropped.load(Ordering::Relaxed), 3);
+
+        // Reaching RETIRE_BATCH_LIMIT auto-flushes without calling flush_retired.
+        let batch_dropped = Arc::new(AtomicUsize::new(0));
+        for i in 0..super::RETIRE_BATCH_LIMIT {
+            super::push_retired_local(
+                base + 100 + i as u64,
+                super::Retired::Any(Box::new(Count(Arc::clone(&batch_dropped)))),
+            );
+        }
+        assert_eq!(super::RETIRED.lock().unwrap_or_else(|e| e.into_inner()).len(), super::RETIRE_BATCH_LIMIT);
+        super::bury(base + 100 + super::RETIRE_BATCH_LIMIT as u64 + lag);
+        assert_eq!(batch_dropped.load(Ordering::Relaxed), super::RETIRE_BATCH_LIMIT);
+
+        // Thread exit flushes any remaining buffered items via Drop.
+        let exit_dropped = Arc::new(AtomicUsize::new(0));
+        let exit_clone = Arc::clone(&exit_dropped);
+        std::thread::spawn(move || {
+            super::push_retired_local(base + 500, super::Retired::Any(Box::new(Count(exit_clone))));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(super::RETIRED.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(exit_dropped.load(Ordering::Relaxed), 0);
+        super::bury(base + 500 + lag - 1);
+        assert_eq!(exit_dropped.load(Ordering::Relaxed), 0);
+        super::bury(base + 500 + lag);
+        assert_eq!(exit_dropped.load(Ordering::Relaxed), 1);
     }
 }
 

@@ -1267,6 +1267,7 @@ pub(crate) fn log(frames: f64) {
         "guard outside lock per frame: {}",
         crate::watch::guard_outside_stats(frames as f64)
     );
+    crate::watch::port_guard_line(frames as f64);
     tracing::info!(
         "ported guard/tex fast paths per frame: {}; {}",
         crate::watch::batch_open_stats(frames as f64),

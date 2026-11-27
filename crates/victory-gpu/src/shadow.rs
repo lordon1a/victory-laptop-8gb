@@ -126,6 +126,10 @@ struct Card {
     sent: Mutex<SentRuns>,
     /// Whether something was put into `dirty` since it was last taken.
     touched: std::sync::atomic::AtomicBool,
+    /// The copy itself, set when it is listed in [`CARDED`]: with
+    /// [`touched_list`] a copy whose `touched` goes from unset to set puts
+    /// this in [`TOUCHED`].
+    me: std::sync::OnceLock<std::sync::Weak<Shadow>>,
     /// The buffers' bytes (the title buffer's, rounded up to 64 KiB).
     size: u64,
 }
@@ -308,6 +312,34 @@ pub(crate) fn card_room_kept() -> u64 {
 
 /// The copies in the card's memory.
 static CARDED: Mutex<Vec<std::sync::Weak<Shadow>>> = Mutex::new(Vec::new());
+
+/// With [`touched_list`]: the copies in the card's memory whose `touched`
+/// was set since [`card_dirty`] last took them (a copy at most once a time
+/// it is set). [`card_dirty`] then looks at these, not at all of [`CARDED`]:
+/// with the small buffers in the card's memory (`CARD_BUFFERS_MIN_KB=64`,
+/// thousands of copies) going through all of them was 7% of the
+/// submitting thread (profile prf-min64, 27.11).
+static TOUCHED: Mutex<Vec<std::sync::Weak<Shadow>>> = Mutex::new(Vec::new());
+
+/// `VICTORY_CARD_TOUCHED=1`: [`TOUCHED`] is kept and used (off by default
+/// until measured).
+fn touched_list() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VICTORY_CARD_TOUCHED").is_ok_and(|v| v.trim() == "1"))
+}
+
+/// Lists `shadow`, which has a card side, in [`CARDED`].
+fn carded(shadow: &Arc<Shadow>) {
+    let weak = Arc::downgrade(shadow);
+    if let Some(card) = &shadow.card {
+        let _ = card.me.set(weak.clone());
+        // Touched before it was listed: taken by the next look.
+        if card.touched.load(Ordering::Acquire) {
+            TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).push(weak.clone());
+        }
+    }
+    CARDED.lock().unwrap_or_else(|e| e.into_inner()).push(weak);
+}
 
 /// Since the last frame line: bytes copied to card sides and the ranges
 /// they were; pieces compared on the card, pieces fetched and their
@@ -642,12 +674,43 @@ impl SentRuns {
 /// be merged came after are dropped.
 pub(crate) fn card_dirty(sent_as: u64) -> Vec<(Arc<Shadow>, Vec<(usize, usize)>)> {
     let mut out = Vec::new();
-    let mut carded = CARDED.lock().unwrap_or_else(|e| e.into_inner());
     let fetched = RELAY_FETCHED.load(Ordering::Acquire);
+    if touched_list() {
+        // Taken out of the lock first: a copy touched meanwhile is put in
+        // again (its `touched` is unset only below) and taken next time.
+        let touched = std::mem::take(&mut *TOUCHED.lock().unwrap_or_else(|e| e.into_inner()));
+        for weak in touched {
+            if let Some(shadow) = weak.upgrade() {
+                take_card_dirty(shadow, sent_as, fetched, &mut out);
+            }
+        }
+        // The copies gone, now and then (not every look: that was the cost).
+        static LOOKS: AtomicU64 = AtomicU64::new(0);
+        if LOOKS.fetch_add(1, Ordering::Relaxed) % 1024 == 0 {
+            CARDED.lock().unwrap_or_else(|e| e.into_inner()).retain(|w| w.strong_count() > 0);
+        }
+        return out;
+    }
+    let mut carded = CARDED.lock().unwrap_or_else(|e| e.into_inner());
     carded.retain(|weak| {
         let Some(shadow) = weak.upgrade() else {
             return false;
         };
+        take_card_dirty(shadow, sent_as, fetched, &mut out);
+        true
+    });
+    out
+}
+
+/// [`card_dirty`] of one copy: its changed ranges, if it was touched, taken
+/// into `out`.
+fn take_card_dirty(
+    shadow: Arc<Shadow>,
+    sent_as: u64,
+    fetched: u64,
+    out: &mut Vec<(Arc<Shadow>, Vec<(usize, usize)>)>,
+) {
+    {
         let ranges = shadow
             .card
             .as_ref()
@@ -666,9 +729,7 @@ pub(crate) fn card_dirty(sent_as: u64) -> Vec<(Arc<Shadow>, Vec<(usize, usize)>)
         if !ranges.is_empty() {
             out.push((shadow, ranges));
         }
-        true
-    });
-    out
+    }
 }
 
 /// Diagnostics (`crate::host::upcheck`, nothing in the air): copies whose
@@ -680,7 +741,7 @@ pub(crate) fn card_dirty(sent_as: u64) -> Vec<(Arc<Shadow>, Vec<(usize, usize)>)
 pub(crate) fn stale_pages(most: usize, say: &mut dyn FnMut(&Shadow, usize, usize, (usize, u32, u32))) -> usize {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut all: Vec<Arc<Shadow>> = buffers_read().values().filter_map(|e| e.shadow.clone()).collect();
-    all.extend(LOOSE.write().unwrap_or_else(|e| e.into_inner()).values().cloned());
+    all.extend(LOOSE.read().unwrap_or_else(|e| e.into_inner()).values().cloned());
     all.retain(|s| s.place.is_none() && s.watched.load(Ordering::Relaxed) == 1);
     all.sort_by_key(|s| s.id);
     let next = NEXT.load(Ordering::Relaxed);
@@ -2823,7 +2884,7 @@ static LET_GO: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 #[cfg(feature = "diagnostics")]
 pub(crate) fn windows() -> [u64; 3] {
     let asked: u64 = {
-        let loose = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+        let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
         loose
             .values()
             .map(|s| {
@@ -2847,7 +2908,7 @@ pub(crate) fn windows() -> [u64; 3] {
 #[cfg(feature = "diagnostics")]
 pub(crate) fn window_use() -> [u64; 8] {
     let mut out = [0u64; 8];
-    let loose = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+    let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
     for s in loose.values() {
         let copied = s.copied.lock().unwrap_or_else(|e| e.into_inner());
         let pages = copied.iter().filter(|&&at| at != 0).count() as u64;
@@ -2892,6 +2953,13 @@ pub(crate) fn let_go_idle() {
         if map.is_empty() {
             return;
         }
+        // Invalidate TLS `FOUND` before checking `Arc::strong_count == 1`,
+        // matching the `SeqCst` handshake in `found()`. Only when `FOUND`
+        // holds loose windows: otherwise it would drop every thread's
+        // cached buffers before each submission for nothing.
+        if loose_found() {
+            BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+        }
         let idle_ms = crate::host::ram_idle_ms(crate::host::available_physical_ram());
         let idle: Vec<(u64, u64)> = map
             .iter()
@@ -2925,7 +2993,7 @@ pub(crate) fn let_go_idle() {
 #[cfg(feature = "diagnostics")]
 pub(crate) fn memory() -> [u64; 6] {
     let (windows, window_bytes) = {
-        let loose = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+        let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
         // Each copy once: a window may stand under several keys.
         let mut seen = std::collections::HashSet::new();
         let bytes: u64 = loose
@@ -4228,7 +4296,13 @@ impl Shadow {
             }
         }
         // (Under the lock: what takes the list sees it or finds it set.)
-        card.touched.store(true, Ordering::Release);
+        let was = card.touched.swap(true, Ordering::AcqRel);
+        if !was
+            && touched_list()
+            && let Some(me) = card.me.get()
+        {
+            TOUCHED.lock().unwrap_or_else(|e| e.into_inner()).push(me.clone());
+        }
     }
 
     /// Whether shaders were ever declared to write it.
@@ -4525,6 +4599,7 @@ impl Shadow {
                 dirty: Mutex::default(),
                 sent: Mutex::default(),
                 touched: Default::default(),
+                me: Default::default(),
                 size: len.next_multiple_of(PIECE as u64),
             });
         }
@@ -4681,6 +4756,7 @@ mod land_tests {
             dirty: Mutex::default(),
             sent: Mutex::default(),
                 touched: Default::default(),
+                me: Default::default(),
             size: len as u64,
         });
         Some(shadow)
@@ -4964,6 +5040,12 @@ fn quick_find() -> bool {
     crate::toggled!("VICTORY_QUICK_FIND")
 }
 
+/// Whether [`FOUND`] also caches [`LOOSE`] hits (`VICTORY_LOOSE_FOUND=1`; off by default).
+fn loose_found() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| crate::switch::on("VICTORY_LOOSE_FOUND"))
+}
+
 fn found_at(address: u64, len: u64) -> usize {
     let h = (address ^ len.rotate_left(32)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> 54) as usize % FOUND_MOST
@@ -5035,6 +5117,9 @@ pub(crate) fn in_place_let_go(at: u64, len: u64) -> u64 {
     let mut gone: Vec<Arc<Shadow>> = Vec::new();
     {
         let mut map = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+        if loose_found() {
+            BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+        }
         let keys: Vec<(u64, u64)> = map
             .range((at.saturating_sub(WINDOW), 0)..(end, 0))
             .filter(|(key, shadow)| shadow.place.is_some() && key.0 + key.1 > at)
@@ -5063,7 +5148,7 @@ pub(crate) fn in_place_let_go(at: u64, len: u64) -> u64 {
 /// bytes, true).
 pub(crate) fn spans() -> Vec<(u64, u64, bool)> {
     let mut spans: Vec<(u64, u64, bool)> = buffers_read().iter().map(|(key, entry)| (key.0, entry.end - key.0, false)).collect();
-    let loose = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+    let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
     spans.extend(loose.keys().map(|&(start, len)| (start, len, true)));
     spans
 }
@@ -5109,6 +5194,12 @@ pub(crate) fn peek(address: u64, len: u64) -> Option<Arc<Shadow>> {
 fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
     let quick = quick_find();
     if quick && let Some(shadow) = found(address, len) {
+        if loose_found() && shadow.window {
+            let now = crate::host::moment();
+            if shadow.used.load(Ordering::Relaxed) != now {
+                shadow.used.store(now, Ordering::Relaxed);
+            }
+        }
         return Some(shadow);
     }
     let end = address.checked_add(len.max(1))?;
@@ -5125,8 +5216,11 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
             }
             Some(_) => {}
             None => {
+                // Capture the generation while `BUFFERS.read()` is held so a concurrent
+                // `register` before `LOOSE.read()` invalidates the cached entry.
+                let changed = (quick && loose_found()).then(|| BUFFERS_CHANGED.load(Ordering::SeqCst));
                 drop(map);
-                return loose(address, end, len <= 1, any);
+                return loose(address, len, end, len <= 1, any, changed);
             }
         }
     }
@@ -5138,8 +5232,9 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
         .find(|(_, e)| e.end >= end)
         .map(|(k, _)| *k);
     let Some(key) = key else {
+        let changed = (quick && loose_found()).then(|| BUFFERS_CHANGED.load(Ordering::SeqCst));
         drop(map);
-        return loose(address, end, len <= 1, any);
+        return loose(address, len, end, len <= 1, any, changed);
     };
     let entry = map.get_mut(&key)?;
     if entry.shadow.is_none() {
@@ -5174,6 +5269,7 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
                     dirty: Mutex::default(),
                     sent: Mutex::default(),
                 touched: Default::default(),
+                me: Default::default(),
                     size,
                 };
                 (on_card, Some(card))
@@ -5199,7 +5295,7 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
         shadow.card = card;
         let shadow = Arc::new(shadow);
         if shadow.card.is_some() {
-            CARDED.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&shadow));
+            carded(&shadow);
         }
         entry.shadow = Some(shadow);
     }
@@ -5308,7 +5404,7 @@ fn fine() -> bool {
 /// which is copied once for each.
 #[cfg(feature = "diagnostics")]
 pub(crate) fn window_cover() -> u64 {
-    let loose = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+    let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
     cover(loose.keys().copied())
 }
 
@@ -5402,17 +5498,18 @@ pub(crate) fn by_address(start: u64, len: u64) -> Option<Arc<Shadow>> {
         dirty: Mutex::default(),
         sent: Mutex::default(),
         touched: Default::default(),
+        me: Default::default(),
         size: len,
     });
     let shadow = Arc::new(shadow);
-    CARDED.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&shadow));
+    carded(&shadow);
     Some(shadow)
 }
 
 /// Copies of title memory outside buffers, by (start, length).
 static LOOSE: std::sync::RwLock<BTreeMap<(u64, u64), Arc<Shadow>>> = std::sync::RwLock::new(BTreeMap::new());
 
-fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Shadow>> {
+fn loose(address: u64, ask_len: u64, end: u64, unsized_ask: bool, any: bool, cache_at: Option<u64>) -> Option<Arc<Shadow>> {
     let (cell, _) = window_of(address, end, WINDOW);
     let named = window_of(address, end, if unsized_ask { WINDOW } else { window() });
     // Under the lock, with the handing out: see `let_go_idle`.
@@ -5437,6 +5534,9 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
         let map = LOOSE.read().unwrap_or_else(|e| e.into_inner());
         if let Some(shadow) = map.get(&named) {
             note(shadow);
+            if let Some(changed) = cache_at {
+                remember(address, ask_len, changed, shadow);
+            }
             return Some(shadow.clone());
         }
     }
@@ -5455,6 +5555,11 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
     };
     if let Some(shadow) = map.get(&(start, len)) {
         note(shadow);
+        if !(any && fine() && !unsized_ask)
+            && let Some(changed) = cache_at
+        {
+            remember(address, ask_len, changed, shadow);
+        }
         return Some(shadow.clone());
     }
     // In place, if asked for and the window's memory can be opened: the
@@ -5462,6 +5567,9 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
     if let Some(placed) = crate::inplace::place_for(start, len, true) {
         let shadow = Arc::new(Shadow::placed(placed, start, len, true));
         note(&shadow);
+        if loose_found() {
+            BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+        }
         map.insert((start, len), shadow.clone());
         return Some(shadow);
     }
@@ -5475,6 +5583,9 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
         shadow.mapped = true;
         let shadow = Arc::new(shadow);
         note(&shadow);
+        if loose_found() {
+            BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+        }
         map.insert((start, len), shadow.clone());
         return Some(shadow);
     }
@@ -5491,6 +5602,7 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
                 dirty: Mutex::default(),
                 sent: Mutex::default(),
                 touched: Default::default(),
+                me: Default::default(),
                 size: len,
             };
             (on_card, Some(card))
@@ -5509,9 +5621,12 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
     shadow.card = card;
     let shadow = Arc::new(shadow);
     if shadow.card.is_some() {
-        CARDED.lock().unwrap_or_else(|e| e.into_inner()).push(Arc::downgrade(&shadow));
+        carded(&shadow);
     }
     note(&shadow);
+    if loose_found() {
+        BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+    }
     map.insert((start, len), shadow.clone());
     Some(shadow)
 }
@@ -5733,6 +5848,67 @@ mod window_tests {
             let (start, len) = window_of(address, end, g);
             assert!(start <= address && start + len >= end);
             assert!(start % g == 0 && len % g == 0);
+        }
+    }
+
+    /// A `LOOSE` hit cached in TLS `FOUND` is invalidated whenever `LOOSE`
+    /// changes, so a stale window is never returned.
+    #[test]
+    fn loose_found_invalidated_when_loose_changes() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        let address = 0x7f00_0000_0000u64 + 0x100;
+        let ask_len = 0x200u64;
+        let end = address + ask_len;
+        let named = window_of(address, end, super::window());
+
+        let mut backing_a = vec![0u8; 4096];
+        let mut backing_b = vec![0u8; 4096];
+        let first = super::Shadow::unbacked(named.0, backing_a.as_mut_ptr(), named.1, false);
+        let second = super::Shadow::unbacked(named.0, backing_b.as_mut_ptr(), named.1, false);
+
+        {
+            let mut map = super::LOOSE.write().unwrap_or_else(|e| e.into_inner());
+            super::BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+            map.insert(named, Arc::clone(&first));
+        }
+
+        let gen1 = super::BUFFERS_CHANGED.load(Ordering::SeqCst);
+        let got = super::loose(address, ask_len, end, false, false, Some(gen1)).expect("loose hit");
+        assert!(Arc::ptr_eq(&got, &first));
+        let cached = super::found(address, ask_len).expect("cached in FOUND");
+        assert!(Arc::ptr_eq(&cached, &first));
+
+        // Replacing the LOOSE entry bumps BUFFERS_CHANGED, dropping the cached hit.
+        {
+            let mut map = super::LOOSE.write().unwrap_or_else(|e| e.into_inner());
+            super::BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+            map.insert(named, Arc::clone(&second));
+        }
+        assert!(super::found(address, ask_len).is_none());
+
+        // Re-populating caches the new window.
+        let gen2 = super::BUFFERS_CHANGED.load(Ordering::SeqCst);
+        let got2 = super::loose(address, ask_len, end, false, false, Some(gen2)).expect("loose hit 2");
+        assert!(Arc::ptr_eq(&got2, &second));
+        let cached2 = super::found(address, ask_len).expect("cached second in FOUND");
+        assert!(Arc::ptr_eq(&cached2, &second));
+
+        // With `VICTORY_LOOSE_FOUND=1`, `let_go_idle` also bumps
+        // BUFFERS_CHANGED when LOOSE is non-empty, invalidating FOUND before
+        // checking strong_count. Off (the test default), lookups never put
+        // loose windows in FOUND, so it leaves the counter alone.
+        if super::loose_found() {
+            super::let_go_idle();
+            assert!(super::found(address, ask_len).is_none());
+        }
+
+        // Clean up the test entry.
+        {
+            let mut map = super::LOOSE.write().unwrap_or_else(|e| e.into_inner());
+            super::BUFFERS_CHANGED.fetch_add(1, Ordering::SeqCst);
+            map.remove(&named);
         }
     }
 }
