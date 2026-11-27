@@ -15,9 +15,33 @@ param(
     [int]$DunyaSn = 80,
     # Betikli tuş(lar): bizde Enter = klavye Enter + pad A. Neptune'de pad A = Space (gameinput.rs A_KEY) ama ara sahne
     # klavye Enter'ı basılı tutarak geçiliyor → Neptune için 'Enter,Space' (ikisi birden).
-    [string[]]$Tus = @('Enter')
+    [string[]]$Tus = @('Enter'),
+    # Yiğit oynuyor (27.11): betikli tuş yok, erken teşhis (donma/düz renk → kapat) yok, dünya sonrası durdurma yok.
+    [switch]$Oyna,
+    # Test sahnesi (27.11): koşudan önce saves bu yedekle değiştirilir (oyunun kendi kaydı sahneyi kaydırmasın).
+    # 'acik' = Yiğit'in açık dünya kaydı, 'hapishane' = eski sahne, '' = dokunma.
+    [ValidateSet('', 'acik', 'hapishane')][string]$Sahne = ''
 )
+if ($Oyna) { $Tus = @(); $DunyaSn = 0 }
 $ErrorActionPreference = 'Stop'
+
+if ($Sahne -and -not $DryRun) {
+    $kayitlar = @{
+        acik      = '%USERPROFILE%\AppData\Local\Victory\yedek_saves_20261127_0730_acikdunya'
+        hapishane = '%USERPROFILE%\AppData\Local\Victory\yedek_saves_20261127_0710_hapishane'
+    }
+    $saves = '%USERPROFILE%\AppData\Local\Victory\data-root\data\7952987A\saves'
+    $kaynak = Join-Path $kayitlar[$Sahne] '0009000000000001'
+    if (-not (Test-Path -LiteralPath $kaynak)) { throw "Sahne kaydı yok: $kaynak" }
+    if (Get-Process victory, game_scarlett_master -ErrorAction SilentlyContinue) { throw 'Oyun açıkken kayıt değiştirilmez.' }
+    $hedef = Join-Path $saves '0009000000000001'
+    if (Test-Path -LiteralPath $hedef) { Remove-Item -LiteralPath $hedef -Recurse -Force }
+    Copy-Item -LiteralPath $kaynak -Destination $hedef -Recurse
+    $a = Get-ChildItem -Recurse -File $kaynak | ForEach-Object { (Get-FileHash $_.FullName).Hash } | Sort-Object
+    $b = Get-ChildItem -Recurse -File $hedef | ForEach-Object { (Get-FileHash $_.FullName).Hash } | Sort-Object
+    if (Compare-Object $a $b) { throw 'Sahne kaydı kopyası tutmadı.' }
+    "Sahne: $Sahne ($($b.Count) dosya, hash aynı)"
+}
 
 # 26.11 taban ayar seti (c0-ltosuz 172.7 ms, B13b 169.6 ms; kaynak: kosular\20261126-050543_c0-ltosuz\ayarlar.txt).
 $taban = [ordered]@{
@@ -98,8 +122,10 @@ if ($DryRun) { $arg.DryRun = $true }
 "Koşu $Tag | ek: " + (($Ek.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ', ')
 # Erken teşhis (düz renk / donma / dünya gelmedi → DURDUR) koşuyla birlikte, ayrı süreçte.
 if (-not $DryRun) {
-    Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-        (Join-Path $PSScriptRoot 'erken_teshis.ps1') | Out-Null
+    if (-not $Oyna) {
+        Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            (Join-Path $PSScriptRoot 'erken_teshis.ps1') | Out-Null
+    }
     # PC kullanımı kaydı (26.11): Yiğit koşu sırasında PC'yi kullanabilir; bozulan koşuyu bu kayıt ayıklar.
     Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
         (Join-Path $PSScriptRoot 'kullanim_izle.ps1'), '-Tag', $Tag, '-Dakika', ($Dakika + 2) | Out-Null
