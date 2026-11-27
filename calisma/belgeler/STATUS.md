@@ -10,7 +10,7 @@ Adımlar (sırayla, her biri A/B + kare kontrolü + TEST_DEFTERI + repo):
  1b. [SIRADA, Sol taraması bitince] PORT_GUARD / RETIRE_BATCH / LOOSE_FOUND'u Normal öncelikte, alt ajan çalışmazken, 2 tur × (tab, pg, pg+rb+lf) yeniden ölç.
  4. Arka plan RAM A/B (Marvisak #1820: 2.5 GB boşaltınca 4.6 → 7.5-8.6 fps): koşu öncesi hangi süreçlerin RAM tuttuğunu listele; Yiğit'e hangi programları kapatabileceğini sor (kapatmayı ben yapmam) → aynı ayarla önce/sonra.
  5. TEXTURE_NO_WAIT'i p99/takılma ölçüsüyle yeniden A/B.
- 6. RAM düşürme: (a) WC 7.9 GiB'ın sahibini ölç (32/64 MiB WC grupları kimin: D3D12 upload/GPU_UPLOAD/WINDOWS_BAR?), (b) WINDOW_REUSE (fxceless #1362) A/B, (c) TEXTURE_BUDGET_MB 768 A/B, (d) LIST_POOL=0 maliyet/kazanç.
+ 6. RAM düşürme: (0) Marvisak XMEM_LAZY_COMMIT (H36, Sol en güçlü; #3435 ölçüm bayrağı önce), (a) WC 7.9 GiB'ın sahibini ölç (32/64 MiB WC grupları kimin: D3D12 upload/GPU_UPLOAD/WINDOWS_BAR?), (b) WINDOW_REUSE (fxceless #1362) A/B, (c) TEXTURE_BUDGET_MB 768 A/B, (d) LIST_POOL=0 maliyet/kazanç.
  7. Yeni profil (kazananlarla) → bind'da sıradaki (H31/H35): Marvisak #3379 HostList::keep COM tekilleştirme + CBV araması, fxceless #1443 bind geçici tahsisleri, Op-lite LIST_HOLD, fxceless #1429 toplu descriptor iadesi, ListViews'ı kare boyunca tutma, Marvisak #2821 kilitsiz hazır slot, avatarmanz #96 havuz parçalama.
  7b. Takılma: fxceless #1442 pipeline kitaplığı kilidini ada göre ayırma (5060 Laptop 7.6 sn → 26 µs bekleme).
  8. Gönderim oyun thread'inde (%13): ASYNC_SUBMIT bizde etkin mi doğrula, değilse A/B.
